@@ -1,7 +1,4 @@
-"""OIDC helpers: PKCE, discovery, JWKS cache, id_token verification.
-
-Split out of routers/oidc.py so the pieces are unit-testable without FastAPI.
-"""
+"""OIDC helpers: PKCE, discovery, JWKS cache, id_token verification."""
 from __future__ import annotations
 
 import base64

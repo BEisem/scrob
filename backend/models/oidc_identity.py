@@ -1,16 +1,12 @@
 """OIDC identity binding — one row per (issuer, subject) that logs in via SSO.
 
-The pre-hardening flow matched OIDC users to Scrob accounts by stuffing the
-IdP's identifier claim into ``User.email`` and comparing it. That breaks the
-moment an IdP changes the user's email, mixes two IdPs with overlapping emails,
-or sends a non-email identifier (e.g. ``sub``). This table makes the stable
-``(issuer, sub)`` pair the primary identity key while leaving ``User.email``
-free to hold the actual contact address.
+The stable ``(issuer, sub)`` pair is the primary identity key, so a user's
+``User.email`` can change at the IdP without orphaning their account, and the
+same ``sub`` from two different IdPs is correctly treated as two people.
 
-See routers/oidc.py for the resolution order:
-  1. match on ``(issuer, subject)`` (an existing SSO user)
+See routers/oidc.py for the resolution order on login:
+  1. match on ``(issuer, subject)``
   2. link to a local ``User.email`` when the IdP marks the email verified
-     (upgrade path for installs that previously used the email-only match)
   3. auto-create (only when ``OIDC_AUTO_CREATE_USERS`` is true)
 """
 from datetime import datetime

@@ -580,10 +580,11 @@ Scrob supports any standards-compliant OpenID Connect provider (Authelia, Authen
 
 ### Prerequisites
 
-- Scrob reachable over HTTPS at a stable domain (localhost is fine for testing). Browsers refuse OIDC cookies without a secure context.
 - Register Scrob as a client at your IdP with redirect URI `https://scrob.yourdomain.com/oidc-callback`.
 
 ### Minimal config
+
+Add these to the `environment:` section of the `scrob` service in your `docker-compose.yaml` (or `docker-compose.yml` for the omnibus image), or to your `.env` file if you run from source — same place as `DATABASE_URL`, `SECRET_KEY`, and the SMTP vars.
 
 ```yaml
 OIDC_ENABLED: "true"
@@ -614,14 +615,13 @@ OIDC_AUTO_CREATE_USERS: "true"
 ### MFA, logout, and account linking
 
 - SSO uses the IdP's MFA (number-matching push, passkey, TOTP, etc.). Scrob's own TOTP only runs on password logins.
-- `OIDC_LOGOUT_URL` (or an `end_session_endpoint` from discovery) is now actually used: logging out of Scrob also ends the IdP session. Leave it unset for providers without RP-initiated logout (Google) and Scrob will only clear its own cookie.
+- If `OIDC_LOGOUT_URL` is set (or `end_session_endpoint` is present in your discovery document), logging out of Scrob also ends the IdP session. Otherwise Scrob just clears its own cookie — leave it unset for providers that don't offer RP-initiated logout (e.g. Google).
 - Existing local accounts with the same **verified** email as the SSO user are linked automatically on first SSO login - the account, library, and TOTP all stay. Scrob never links to an account whose IdP marks `email_verified: false`.
 
-### Upgrade notes
+### Notes
 
-Existing OIDC installs keep working with no config changes - Scrob falls back to the pre-hardening userinfo+email match if discovery/issuer/JWKS are not set (a warning is logged on first use). To enable full hardening, add `OIDC_DISCOVERY_URL`; no DB migration or IdP client re-registration is required.
-
-Admin promotion is still "first user in the empty DB"; group/role claims from the IdP are ignored.
+- Setting `OIDC_DISCOVERY_URL` (or both `OIDC_ISSUER` and `OIDC_JWKS_URL`) enables `id_token` signature verification and `(issuer, sub)` identity binding. Without them, Scrob matches users by the `OIDC_IDENTIFIER_FIELD` userinfo claim and logs a warning on first login.
+- The first account created on an empty Scrob instance becomes admin, whether that happens via local registration or SSO. Group and role claims from the IdP are ignored.
 
 ## Email Validation & SMTP
 
