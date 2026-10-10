@@ -300,6 +300,7 @@ Database migrations run automatically on startup - no manual steps required.
 | `PGID` | `1000` | Group ID to run the process as. |
 | `BACKEND_PORT` | `7331` | Internal port the backend binds to. Override only if `7331` conflicts on bare metal. |
 | `OIDC_ENABLED` | `false` | Enable OIDC login. |
+| `OIDC_DISCOVERY_URL` | - | OpenID discovery document URL. When set, Scrob validates `id_token` signatures (JWKS), issuer, audience, and nonce. |
 | `OIDC_DISABLE_PASSWORD_LOGIN` | `false` | Enforce OIDC-only login (disables username/password). |
 
 See `docker-compose.yaml` for the full list of OIDC variables and other variables.
@@ -575,25 +576,52 @@ The `POST /api/proxy/webhooks/kodi` endpoint (and the `kodi/history`, `kodi/rati
 
 ## OIDC / Single Sign-On
 
-Scrob supports any OpenID Connect provider (Authelia, Authentik, Keycloak, Google, etc.).
+Scrob supports any standards-compliant OpenID Connect provider (Authelia, Authentik, Keycloak, Google, etc.). Login flow is authorization-code with PKCE; when discovery is configured the `id_token` is signature-verified (JWKS) and identity is bound on the IdP's stable `(issuer, sub)` pair so a changed email never breaks the account.
+
+### Prerequisites
+
+- Scrob reachable over HTTPS at a stable domain (localhost is fine for testing). Browsers refuse OIDC cookies without a secure context.
+- Register Scrob as a client at your IdP with redirect URI `https://scrob.yourdomain.com/oidc-callback`.
+
+### Minimal config
 
 ```yaml
 OIDC_ENABLED: "true"
-OIDC_PROVIDER_NAME: "Authelia"
+OIDC_PROVIDER_NAME: "Authentik"
 OIDC_CLIENT_ID: "scrob"
 OIDC_CLIENT_SECRET: "your-secret"
-OIDC_AUTH_URL: "https://auth.yourdomain.com/api/oidc/authorization"
-OIDC_TOKEN_URL: "https://auth.yourdomain.com/api/oidc/token"
-OIDC_USERINFO_URL: "https://auth.yourdomain.com/api/oidc/userinfo"
+OIDC_AUTH_URL: "https://auth.yourdomain.com/application/o/authorize/"
+OIDC_TOKEN_URL: "https://auth.yourdomain.com/application/o/token/"
+OIDC_USERINFO_URL: "https://auth.yourdomain.com/application/o/userinfo/"
 OIDC_REDIRECT_URL: "https://scrob.yourdomain.com/oidc-callback"
-# OIDC_LOGOUT_URL: "https://auth.yourdomain.com/api/oidc/logout"  # your provider's logout endpoint
-# OIDC_SCOPES: "openid email profile"     # default shown - override only if your provider needs different scopes
-# OIDC_IDENTIFIER_FIELD: "email"          # userinfo field used to match/create the Scrob account - default shown
+# Recommended — enables id_token signature verification and (issuer, sub) binding:
+OIDC_DISCOVERY_URL: "https://auth.yourdomain.com/application/o/scrob/.well-known/openid-configuration"
+# Optional — enables RP-initiated SSO logout (populated from discovery when unset):
+# OIDC_LOGOUT_URL: "https://auth.yourdomain.com/application/o/scrob/end-session/"
+# OIDC_SCOPES: "openid email profile"     # default shown
+# OIDC_IDENTIFIER_FIELD: "email"          # userinfo field used only in compat mode
+# OIDC_ISSUER / OIDC_JWKS_URL             # explicit fallbacks when discovery isn't available
 OIDC_AUTO_CREATE_USERS: "true"
 # OIDC_DISABLE_PASSWORD_LOGIN: "true"  # uncomment to enforce SSO-only
 ```
 
-Register Scrob as a client in your provider with redirect URI: `https://scrob.yourdomain.com/oidc-callback`
+### What users see
+
+- The login page shows a **Login with {OIDC_PROVIDER_NAME}** button. If `OIDC_DISABLE_PASSWORD_LOGIN=true`, the password form is hidden and the registration link is removed.
+- First SSO login creates a Scrob account automatically unless `OIDC_AUTO_CREATE_USERS=false`. In that case only pre-existing accounts (matched by verified email) can sign in via SSO.
+- Settings → Security shows the linked SSO provider and offers an **Unlink** button. Unlink is refused when it would lock the user out (no password set, SSO-only mode on, and the identity is the only one).
+
+### MFA, logout, and account linking
+
+- SSO uses the IdP's MFA (number-matching push, passkey, TOTP, etc.). Scrob's own TOTP only runs on password logins.
+- `OIDC_LOGOUT_URL` (or an `end_session_endpoint` from discovery) is now actually used: logging out of Scrob also ends the IdP session. Leave it unset for providers without RP-initiated logout (Google) and Scrob will only clear its own cookie.
+- Existing local accounts with the same **verified** email as the SSO user are linked automatically on first SSO login - the account, library, and TOTP all stay. Scrob never links to an account whose IdP marks `email_verified: false`.
+
+### Upgrade notes
+
+Existing OIDC installs keep working with no config changes - Scrob falls back to the pre-hardening userinfo+email match if discovery/issuer/JWKS are not set (a warning is logged on first use). To enable full hardening, add `OIDC_DISCOVERY_URL`; no DB migration or IdP client re-registration is required.
+
+Admin promotion is still "first user in the empty DB"; group/role claims from the IdP are ignored.
 
 ## Email Validation & SMTP
 

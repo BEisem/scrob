@@ -418,11 +418,24 @@ export interface OidcConfig {
   enabled: boolean;
   provider_name: string;
   disable_password_login: boolean;
+  sso_logout_available: boolean;
+  logout_url: string | null;
+  pkce_enabled: boolean;
+  id_token_validation: boolean;
 }
 
 export interface OidcAuthorizeResponse {
   auth_url: string;
   state: string;
+  code_verifier: string | null;
+  nonce: string | null;
+}
+
+export interface OidcIdentity {
+  issuer: string;
+  provider_name: string | null;
+  created_at: string;
+  last_login_at: string | null;
 }
 
 export interface OidcExchangeResponse {
@@ -1326,8 +1339,12 @@ export const api = {
       get<OidcConfig>("/auth/oidc/config"),
     oidcAuthorize: () =>
       get<OidcAuthorizeResponse>("/auth/oidc/authorize"),
-    oidcExchange: (code: string) =>
-      post<OidcExchangeResponse>("/auth/oidc/exchange", { code }),
+    oidcExchange: (body: { code: string; code_verifier?: string; nonce?: string }) =>
+      post<OidcExchangeResponse>("/auth/oidc/exchange", body),
+    oidcIdentities: (token: string) =>
+      get<OidcIdentity[]>("/auth/oidc/identities", undefined, token),
+    oidcUnlink: (body: { issuer: string }, token: string) =>
+      post<{ status: string }>("/auth/oidc/unlink", body, token),
   },
 
   trakt: {
