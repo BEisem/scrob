@@ -13,7 +13,9 @@ also need Authorization: Bearer <access_token>.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+import time
+import weakref
+from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 
 import httpx
@@ -23,18 +25,90 @@ logger = logging.getLogger(__name__)
 WETRAKR_BASE = "https://api.wetrakr.com"
 WETRAKR_CLIENT_ID = "e91f5041de433d4e7df4432cd1b04f94"
 TIMEOUT = 30.0
+# A write of up to 5,000 items can take the server well past TIMEOUT. A read
+# timeout there leaves the caller not knowing whether it was applied.
+WRITE_TIMEOUT = 120.0
 PAGE_SIZE = 100
+COMPACT_PAGE_SIZE = 5000
 MAX_RETRIES = 4
 MAX_RETRY_WAIT = 120.0
 
 # One lock per access token: every call made on a user's behalf is serialised,
 # so a user never has two requests in flight at once (the WeTrakr dev asked
 # for this after bursts of parallel POST /sync/tracking exhausted their API).
-_user_locks: dict[str, asyncio.Lock] = {}
+# Weakly referenced so a rotated token's lock goes away with its last user.
+_user_locks: "weakref.WeakValueDictionary[str, asyncio.Lock]" = weakref.WeakValueDictionary()
 
 
 def _user_lock(access_token: Optional[str]) -> asyncio.Lock:
-    return _user_locks.setdefault(access_token or "", asyncio.Lock())
+    key = access_token or ""
+    lock = _user_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_locks[key] = lock
+    return lock
+
+
+class WeTrakrQuotaExceeded(Exception):
+    """A daily quota is used up (the user's, or the whole app's). Retrying
+    only spends more of it, so requests fail fast until it resets."""
+
+
+class WeTrakrCommentsDisabled(Exception):
+    """WeTrakr answered 403 COMMENTS_NOT_ENABLED: comments are switched on per
+    app on request, and every comment route (reading included) is refused
+    until then."""
+
+
+# Quota blocks, as time.monotonic() deadlines. The app one covers every
+# request; the per-user one is keyed by access token.
+QUOTA_BLOCK_MAX = 3600.0
+COMMENTS_BLOCK = 6 * 3600.0
+_app_quota_blocked_until = 0.0
+_user_quota_blocked_until: dict[str, float] = {}
+_comments_blocked_until = 0.0
+
+
+def _seconds_until_utc_midnight() -> float:
+    now = datetime.now(timezone.utc)
+    midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (midnight - now).total_seconds()
+
+
+def _raise_if_quota_blocked(access_token: Optional[str]) -> None:
+    now = time.monotonic()
+    if now < _app_quota_blocked_until:
+        raise WeTrakrQuotaExceeded("WeTrakr daily app limit reached, waiting for it to reset")
+    key = access_token or ""
+    if now < _user_quota_blocked_until.get(key, 0.0):
+        raise WeTrakrQuotaExceeded("WeTrakr daily quota reached for this account, waiting for it to reset")
+
+
+def _block_quota(access_token: Optional[str], app_wide: bool, resp: httpx.Response) -> None:
+    global _app_quota_blocked_until
+    try:
+        reset = float(resp.headers.get("X-Quota-Reset", ""))
+    except ValueError:
+        reset = _seconds_until_utc_midnight()
+    # Probe again within the hour at most, in case the limit was raised.
+    until = time.monotonic() + max(60.0, min(reset, QUOTA_BLOCK_MAX))
+    if app_wide:
+        _app_quota_blocked_until = until
+    else:
+        now = time.monotonic()
+        for key in [k for k, v in _user_quota_blocked_until.items() if v <= now]:
+            del _user_quota_blocked_until[key]
+        _user_quota_blocked_until[access_token or ""] = until
+
+
+def comments_blocked() -> bool:
+    """True while WeTrakr is known to refuse comments for this app."""
+    return time.monotonic() < _comments_blocked_until
+
+
+def _raise_if_comments_blocked() -> None:
+    if comments_blocked():
+        raise WeTrakrCommentsDisabled("WeTrakr comments are not enabled for this app")
 
 
 def _retry_after(resp: httpx.Response) -> float:
@@ -52,15 +126,33 @@ async def _send(
     **kwargs,
 ) -> httpx.Response:
     """One request, serialised per user, retried after the Retry-After delay on
-    a 429 (or 503). Raises on any other error status."""
+    a concurrency/per-minute 429 (or 503). A daily-quota 429 is never retried:
+    it blocks further requests until the quota resets. Raises on any other
+    error status."""
+    global _comments_blocked_until
     async with _user_lock(access_token):
         for attempt in range(MAX_RETRIES + 1):
+            _raise_if_quota_blocked(access_token)
             resp = await client.request(method, f"{WETRAKR_BASE}{path}", headers=_headers(access_token), **kwargs)
+            if resp.status_code == 429:
+                # APP_QUOTA_EXCEEDED contains QUOTA_EXCEEDED, so check it first.
+                body = resp.text
+                if "APP_QUOTA_EXCEEDED" in body or "QUOTA_EXCEEDED" in body:
+                    app_wide = "APP_QUOTA_EXCEEDED" in body
+                    _block_quota(access_token, app_wide, resp)
+                    raise WeTrakrQuotaExceeded(
+                        f"WeTrakr {'app' if app_wide else 'account'} daily quota exceeded on {method} {path}"
+                    )
             if resp.status_code in (429, 503) and attempt < MAX_RETRIES:
                 wait = _retry_after(resp)
                 logger.warning("WeTrakr %s %s answered %s, retrying in %.0fs", method, path, resp.status_code, wait)
                 await asyncio.sleep(wait)
                 continue
+            if resp.status_code == 403 and (
+                "COMMENTS_NOT_ENABLED" in resp.text or path.startswith("/sync/comments")
+            ):
+                _comments_blocked_until = time.monotonic() + COMMENTS_BLOCK
+                raise WeTrakrCommentsDisabled("WeTrakr comments are not enabled for this app")
             resp.raise_for_status()
             return resp
     raise RuntimeError("unreachable")
@@ -84,12 +176,20 @@ async def _get_all_pages(
     path: str,
     access_token: str,
     extra_params: dict[str, str] | None = None,
+    *,
+    compact: bool = False,
 ) -> list[dict]:
     items: list[dict] = []
     page = 1
+    after: str | None = None
     while True:
         params = dict(extra_params or {})
-        params.update({"page": page, "limit": PAGE_SIZE})
+        if compact:
+            params.update({"compact": "true", "limit": str(COMPACT_PAGE_SIZE)})
+            if after is not None:
+                params["after"] = after
+        else:
+            params.update({"page": str(page), "limit": str(PAGE_SIZE)})
         response = await _send(client, "GET", path, access_token, params=params)
         page_items = response.json()
         if not isinstance(page_items, list):
@@ -98,6 +198,14 @@ async def _get_all_pages(
 
         if not page_items:
             return items
+        if compact:
+            next_cursor = response.headers.get("X-Pagination-Next")
+            if not next_cursor:
+                return items
+            if next_cursor == after:
+                raise RuntimeError(f"WeTrakr {path} returned the same pagination cursor twice")
+            after = next_cursor
+            continue
         try:
             page_count = int(response.headers.get("X-Pagination-Page-Count", page))
         except (TypeError, ValueError):
@@ -239,41 +347,55 @@ async def validate_token(access_token: str) -> bool:
 
 # ── User Data Fetching ────────────────────────────────────────────────────────
 
-async def get_watched_history(access_token: str, target: Literal["movies", "episodes"]) -> list[dict]:
-    """Fetch every play (rewatches included), newest first.
+async def get_watched_history(
+    access_token: str,
+    target: Literal["movies", "episodes"],
+    from_date: str | None = None,
+) -> list[dict]:
+    """Fetch plays changed after from_date, or every play on first sync.
 
-    Each entry has: id (play id), watched_at, watched_at_unknown, and either
-    `movie` or `episode` (episode carries season_number, number, and the
-    parent show as {id, title, ids}).
+    Compact cursor pages carry up to 5,000 rows and are the API's intended
+    representation for sync clients.
     """
+    params = {"from_date": from_date} if from_date else None
     async with httpx.AsyncClient(timeout=120.0) as client:
         return await _get_all_pages(
             client,
             f"/sync/tracking/watched/history/{target}",
             access_token,
+            params,
+            compact=True,
         )
 
 
-async def get_ratings(access_token: str, target: Literal["movies", "shows"]) -> list[dict]:
-    """Fetch every rating for one target, most recent first.
+async def get_ratings(
+    access_token: str,
+    target: Literal["movies", "shows"],
+    from_date: str | None = None,
+) -> list[dict]:
+    """Fetch ratings changed after from_date, most recent first.
 
-    Each entry is a media object with the user's rating under
-    interactions.user.rating (1-10) and the date in rated_at.
+    Compact cursor pages carry up to 5,000 rows. Removed rows are included on
+    incremental reads so callers can reconcile deletions.
     """
+    params = {"from_date": from_date} if from_date else None
     async with httpx.AsyncClient(timeout=60.0) as client:
         return await _get_all_pages(
             client,
             f"/sync/ratings/{target}",
             access_token,
+            params,
+            compact=True,
         )
 
 
 # ── Lists ──────────────────────────────────────────────────────────────────────
 
-async def get_lists(access_token: str) -> list[dict]:
-    """Fetch every list the user owns."""
+async def get_lists(access_token: str, from_date: str | None = None) -> list[dict]:
+    """Fetch lists changed after from_date, or every list on first sync."""
+    params = {"from_date": from_date} if from_date else None
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await _send(client, "GET", "/sync/lists", access_token)
+        resp = await _send(client, "GET", "/sync/lists", access_token, params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -321,8 +443,12 @@ async def add_items_to_list(access_token: str, list_id: int, movies: list[int], 
 
 # ── Comments ───────────────────────────────────────────────────────────────────
 
-async def get_comments(access_token: str, target: Literal["movies", "shows", "seasons", "episodes"]) -> list[dict]:
-    """Fetch the comments the user wrote for one target, newest first.
+async def get_comments(
+    access_token: str,
+    target: Literal["movies", "shows", "seasons", "episodes"],
+    from_date: str | None = None,
+) -> list[dict]:
+    """Fetch comments changed after from_date, newest first.
 
     Each entry carries its own id, `target` (movie/show/season/episode/...),
     text, spoiler and comment_added_at/comment_updated_at, plus a compact
@@ -331,11 +457,14 @@ async def get_comments(access_token: str, target: Literal["movies", "shows", "se
     other "Media object" response in this API), so resolving it to a tmdb id
     needs a follow-up lookup via get_movie/get_show/get_season/get_episode.
     """
+    _raise_if_comments_blocked()
+    params = {"from_date": from_date} if from_date else None
     async with httpx.AsyncClient(timeout=60.0) as client:
         return await _get_all_pages(
             client,
             f"/sync/comments/{target}",
             access_token,
+            params,
         )
 
 
@@ -358,6 +487,7 @@ async def write_comment(
     """
     if not movie_tmdb_id and not show_tmdb_id:
         raise ValueError("write_comment requires movie_tmdb_id or show_tmdb_id")
+    _raise_if_comments_blocked()
     body: dict = {"text": text, "spoiler": spoiler}
     if movie_tmdb_id:
         body["movie"] = {"ids": {"tmdb": movie_tmdb_id}}
@@ -375,16 +505,14 @@ async def get_movie(wetrakr_id: int) -> dict:
     """Full metadata for one movie by its WeTrakr id — carries external ids
     under `ids`, unlike a comment's compact nested reference."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{WETRAKR_BASE}/movies/{wetrakr_id}", headers=_headers())
-        resp.raise_for_status()
+        resp = await _send(client, "GET", f"/movies/{wetrakr_id}", None)
         return resp.json()
 
 
 async def get_show(wetrakr_id: int) -> dict:
     """Full metadata for one show by its WeTrakr id."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{WETRAKR_BASE}/shows/{wetrakr_id}", headers=_headers())
-        resp.raise_for_status()
+        resp = await _send(client, "GET", f"/shows/{wetrakr_id}", None)
         return resp.json()
 
 
@@ -393,8 +521,7 @@ async def get_season(wetrakr_id: int) -> dict:
     (`show.ids.tmdb`) and the season's own `number`. Confirmed against the
     live API — the docs' textual field descriptions here are unreliable."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{WETRAKR_BASE}/seasons/{wetrakr_id}", headers=_headers())
-        resp.raise_for_status()
+        resp = await _send(client, "GET", f"/seasons/{wetrakr_id}", None)
         return resp.json()
 
 
@@ -404,8 +531,7 @@ async def get_episode(wetrakr_id: int) -> dict:
     exact field names for season/episode number are a best-effort guess;
     callers must tolerate a resolution failure gracefully."""
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        resp = await client.get(f"{WETRAKR_BASE}/episodes/{wetrakr_id}", headers=_headers())
-        resp.raise_for_status()
+        resp = await _send(client, "GET", f"/episodes/{wetrakr_id}", None)
         return resp.json()
 
 
@@ -467,7 +593,7 @@ async def add_to_watched_batch(
             }
             for show_tmdb_id, seasons in shows_map.items()
         ]
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=WRITE_TIMEOUT) as client:
         resp = await _send(client, "POST", "/sync/tracking", access_token, json=body)
         _log_unresolved("watched push", resp)
 
@@ -496,7 +622,7 @@ async def set_ratings_batch(
             {"rating": max(1, min(10, round(rating))), "ids": {"tmdb": tmdb_id}}
             for tmdb_id, rating in show_ratings
         ]
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=WRITE_TIMEOUT) as client:
         resp = await _send(client, "POST", "/sync/ratings", access_token, json=body)
         _log_unresolved("ratings push", resp)
 

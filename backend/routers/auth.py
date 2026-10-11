@@ -468,6 +468,16 @@ async def update_user_settings(
     # history, so drop the incremental bookmark.
     if any(update_data.get(f) and not getattr(settings, f) for f in ("wetrakr_push_watched", "wetrakr_push_ratings")):
         settings.wetrakr_last_push_at = None
+    if update_data.get("wetrakr_push_lists") and not settings.wetrakr_push_lists:
+        settings.wetrakr_last_lists_push_at = None
+    # Likewise a pull option turned on later has never been read: without
+    # dropping the stamp, the incremental pull would only ever see changes
+    # made from now on and skip the existing data.
+    if any(
+        update_data.get(f) and not getattr(settings, f)
+        for f in ("wetrakr_sync_watched", "wetrakr_sync_ratings", "wetrakr_sync_lists", "wetrakr_sync_comments")
+    ):
+        settings.wetrakr_last_activity = None
 
     for field, value in update_data.items():
         if hasattr(settings, field):
