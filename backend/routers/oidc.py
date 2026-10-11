@@ -1,10 +1,11 @@
 """OIDC authorization-code login.
 
 Flow: /authorize builds the IdP URL (with state/PKCE/nonce), /exchange swaps
-the code for a Scrob JWT. The hardened path validates the id_token and binds
-on (issuer, sub) via ``oidc_identities``; without OIDC_DISCOVERY_URL (or
-OIDC_ISSUER+OIDC_JWKS_URL) we fall back to the pre-hardening userinfo+email
-match (compat for existing installs; logs a one-shot warning).
+the code for a Scrob JWT. When OIDC_DISCOVERY_URL (or OIDC_ISSUER +
+OIDC_JWKS_URL) is set, the id_token is signature-verified and identity is
+bound on (issuer, sub) via ``oidc_identities``. Otherwise login falls back
+to matching users by the OIDC_IDENTIFIER_FIELD userinfo claim and a warning
+is logged on first use.
 """
 from __future__ import annotations
 
@@ -139,8 +140,9 @@ async def _resolve_user(
             identity.last_login_at = datetime.utcnow()
             return user
 
-    # Link to a local user by email, or by the legacy identifier column for
-    # installs that stuffed OIDC_IDENTIFIER_FIELD into User.email pre-hardening.
+    # Link to a local user by email. When OIDC_IDENTIFIER_FIELD is not "email",
+    # also try the value of that claim against User.email — some installs keep
+    # a non-email identifier (e.g. "sub") in that column.
     link_candidates: list[tuple[str, str]] = []
     if email:
         link_candidates.append(("email", email))
@@ -224,6 +226,13 @@ async def oidc_config():
 @router.get("/authorize", response_model=OidcAuthorizeResponse)
 @limiter.limit("30/minute")
 async def oidc_authorize(request: Request):
+    """Return the IdP authorization URL plus the per-login state, PKCE
+    verifier, and nonce.
+
+    The frontend SSR layer stashes all three in HttpOnly cookies and
+    redirects the browser to the IdP — the browser never talks to this
+    endpoint directly. /exchange later checks the verifier and nonce.
+    """
     if not app_settings.oidc_enabled:
         raise HTTPException(status_code=400, detail="OIDC not enabled")
     if not app_settings.oidc_auth_url or not app_settings.oidc_client_id:
@@ -261,6 +270,12 @@ async def oidc_exchange(
     payload: OidcExchangeRequest,
     db: AsyncSession = Depends(get_db),
 ):
+    """Swap an IdP authorization code for a Scrob JWT.
+
+    Called server-to-server by the frontend's oidc-callback SSR page, which
+    forwards the PKCE verifier and nonce it stashed in HttpOnly cookies at
+    /authorize time. All id_token / nonce / sub checks happen here.
+    """
     if not app_settings.oidc_enabled:
         raise HTTPException(status_code=400, detail="OIDC not enabled")
     if not (
@@ -293,9 +308,11 @@ async def oidc_exchange(
                 raise HTTPException(status_code=400, detail="Token exchange failed")
 
             token_json = token_resp.json()
-            access_token = token_json.get("access_token")
+            # IdP-issued access token (for calling userinfo). Not to be confused
+            # with the Scrob JWT we return at the end of this handler.
+            oidc_access_token = token_json.get("access_token")
             id_token = token_json.get("id_token")
-            if not access_token:
+            if not oidc_access_token:
                 raise HTTPException(status_code=400, detail="No access token in response")
 
             claims: dict = {}
@@ -316,7 +333,7 @@ async def oidc_exchange(
 
             userinfo_resp = await client.get(
                 app_settings.oidc_userinfo_url,
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": f"Bearer {oidc_access_token}"},
             )
             if not userinfo_resp.is_success:
                 raise HTTPException(status_code=400, detail="Failed to fetch user info")
