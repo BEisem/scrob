@@ -3296,7 +3296,19 @@ async def clear_collection(
     await db.execute(delete(Collection).where(Collection.user_id == current_user.id))
     await db.commit()
 
-    await _push_collection_change(db, current_user.id, media_ids, added=False)
+    # Pushing removals to every target can take minutes on a large collection,
+    # long enough for the proxy to drop the request, so do it off the request.
+    user_id = current_user.id
+
+    async def _push_in_background() -> None:
+        try:
+            async with AsyncSessionLocal() as push_db:
+                await _push_collection_change(push_db, user_id, media_ids, added=False)
+        except Exception:
+            logger.exception("Pushing cleared collection for user %s failed", user_id)
+
+    if media_ids:
+        asyncio.create_task(_push_in_background())
     return {"status": "ok"}
 
 
