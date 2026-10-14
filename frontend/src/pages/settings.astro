@@ -1,7 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import { api } from "../lib/api";
-import type { TotpBackupCode } from "../lib/api";
+import type { TotpBackupCode, OidcIdentity } from "../lib/api";
 
 const { token } = Astro.locals;
 const [settings, me] = await Promise.all([
@@ -17,6 +17,13 @@ if (me.totp_enabled) {
   } catch {
     // non-fatal — codes panel will just be empty
   }
+}
+
+let oidcIdentities: OidcIdentity[] = [];
+try {
+  oidcIdentities = await api.auth.oidcIdentities(token!);
+} catch {
+  // non-fatal — SSO panel just won't render
 }
 ---
 
@@ -551,6 +558,37 @@ if (me.totp_enabled) {
       <!-- Security -->
       <section id="2fa-section">
         <h2 class="section-headline mb-4 border-b border-zinc-800 pb-2">Security</h2>
+
+        {oidcIdentities.length > 0 && (
+          <div class="mb-8">
+            <h3 class="text-base font-semibold text-zinc-300 mb-3">Single Sign-On</h3>
+            <div class="space-y-3">
+              {oidcIdentities.map((identity) => (
+                <div class="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-zinc-900/40 border border-zinc-800 rounded-2xl p-5">
+                  <div class="min-w-0">
+                    <p class="font-semibold text-zinc-100 truncate">{identity.provider_name || "SSO"}</p>
+                    <p class="text-xs text-zinc-500 truncate">{identity.issuer}</p>
+                    {identity.last_login_at && (
+                      <p class="text-xs text-zinc-500 mt-1">Last login: {new Date(identity.last_login_at).toLocaleString()}</p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    data-oidc-unlink-issuer={identity.issuer}
+                    data-oidc-unlink-name={identity.provider_name || "SSO"}
+                    class="oidc-unlink-btn shrink-0 px-5 py-2 bg-red-600/10 hover:bg-red-600/20 text-red-400 border border-red-500/30 font-bold rounded-lg text-sm transition-colors cursor-pointer"
+                  >
+                    Unlink
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p class="text-xs text-zinc-500 mt-2">
+              Signed in via SSO ignores Scrob's own 2FA — multi-factor is enforced by your identity provider.
+            </p>
+          </div>
+        )}
+
         <h3 class="text-base font-semibold text-zinc-300 mb-3">Two-Factor Authentication</h3>
 
         {!me.totp_enabled ? (
@@ -2117,4 +2155,38 @@ if (me.totp_enabled) {
 
   setup2fa();
   document.addEventListener('astro:after-swap', setup2fa);
+
+  function setupOidcUnlink() {
+    document.querySelectorAll<HTMLButtonElement>('.oidc-unlink-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const issuer = btn.dataset.oidcUnlinkIssuer;
+        const name = btn.dataset.oidcUnlinkName || 'SSO';
+        if (!issuer) return;
+        if (!window.confirm(`Unlink ${name}? You'll no longer be able to sign in with it.`)) return;
+
+        btn.disabled = true;
+        const orig = btn.textContent;
+        btn.textContent = 'Unlinking...';
+        try {
+          const res = await fetch(`/api/proxy/auth/oidc/unlink`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ issuer }),
+          });
+          if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.detail || 'Failed to unlink');
+          }
+          window.location.reload();
+        } catch (e) {
+          showMessage(e instanceof Error ? e.message : 'Failed to unlink', 'error');
+          btn.disabled = false;
+          btn.textContent = orig;
+        }
+      });
+    });
+  }
+
+  setupOidcUnlink();
+  document.addEventListener('astro:after-swap', setupOidcUnlink);
 </script>

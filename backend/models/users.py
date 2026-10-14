@@ -41,6 +41,7 @@ class User(Base):
     ratings           : Mapped[list["Rating"]]           = relationship(back_populates="user", cascade="all, delete-orphan")
     lists             : Mapped[list["List"]]             = relationship(back_populates="user", cascade="all, delete-orphan")
     totp_backup_codes : Mapped[list["TotpBackupCode"]]   = relationship(back_populates="user", cascade="all, delete-orphan")
+    oidc_identities   : Mapped[list["OidcIdentity"]]     = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class UserSettings(Base):
