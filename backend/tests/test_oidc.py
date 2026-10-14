@@ -302,27 +302,55 @@ class HardenedExchangeTests(_OidcTestBase):
         self.assertEqual(db.added[0].user_id, 42)
         self.assertEqual(db.added[0].issuer, "https://provider.example")
 
-    async def test_unverified_email_does_not_link_falls_through_to_create(self):
-        """IdP says email_verified=false → never link to a local account; create fresh."""
+    async def test_unverified_email_of_existing_user_is_refused(self):
+        """IdP says email_verified=false and the email is taken → 403, no link, no duplicate user."""
         local_user = MagicMock(id=42, email="jane@example.com")
         claims = {"iss": "https://provider.example", "sub": "u-jane", "email": "jane@example.com", "email_verified": False}
         token = _FakeResponse(200, {"access_token": "t", "id_token": "x.y.z"})
         info = _FakeResponse(200, {"sub": "u-jane", "email": "jane@example.com", "email_verified": False})
-        # execute: identity (none) → email lookup → local_user (ignored) →
-        # username unique → None → count → 1 (not first user).
-        db = _FakeSession([None, local_user, None, 1])
+        # execute: identity (none) → email lookup → local_user (refused).
+        db = _FakeSession([None, local_user])
 
         with self._patch_verify(claims), \
              patch("routers.oidc.httpx.AsyncClient", return_value=_FakeHttpClient(token, info)), \
              patch("routers.oidc.create_access_token", return_value="jwt"):
-            await oidc.oidc_exchange(_make_request(),
-                oidc.OidcExchangeRequest(code="c", code_verifier="v", nonce="n"), db)
+            with self.assertRaises(oidc.HTTPException) as ctx:
+                await oidc.oidc_exchange(_make_request(),
+                    oidc.OidcExchangeRequest(code="c", code_verifier="v", nonce="n"), db)
 
-        # New user + its identity row; existing local user untouched.
-        self.assertEqual(len(db.added), 2)
-        new_user, _ = db.added
-        self.assertNotEqual(new_user.id, 42)
-        self.assertFalse(new_user.is_admin)
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(db.added, [])
+
+    async def test_missing_email_verified_does_not_link_in_hardened_mode(self):
+        """No email_verified claim at all is not proof of ownership when validation is on."""
+        local_user = MagicMock(id=42, email="jane@example.com")
+        claims = {"iss": "https://provider.example", "sub": "u-jane", "email": "jane@example.com"}
+        token = _FakeResponse(200, {"access_token": "t", "id_token": "x.y.z"})
+        info = _FakeResponse(200, {"sub": "u-jane", "email": "jane@example.com"})
+        db = _FakeSession([None, local_user])
+
+        with self._patch_verify(claims), \
+             patch("routers.oidc.httpx.AsyncClient", return_value=_FakeHttpClient(token, info)), \
+             patch("routers.oidc.create_access_token", return_value="jwt"):
+            with self.assertRaises(oidc.HTTPException) as ctx:
+                await oidc.oidc_exchange(_make_request(),
+                    oidc.OidcExchangeRequest(code="c", code_verifier="v", nonce="n"), db)
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(db.added, [])
+
+    async def test_missing_nonce_rejected_in_hardened_mode(self):
+        token = _FakeResponse(200, {"access_token": "t", "id_token": "x.y.z"})
+        info = _FakeResponse(200, {"sub": "u", "email": "x@example.com"})
+        db = _FakeSession([])
+
+        with self._patch_verify({"sub": "u"}) as verify, \
+             patch("routers.oidc.httpx.AsyncClient", return_value=_FakeHttpClient(token, info)):
+            with self.assertRaises(oidc.HTTPException) as ctx:
+                await oidc.oidc_exchange(_make_request(),
+                    oidc.OidcExchangeRequest(code="c", code_verifier="v", nonce=None), db)
+        self.assertEqual(ctx.exception.status_code, 400)
+        verify.assert_not_called()
 
     async def test_userinfo_sub_mismatch_rejected(self):
         """OIDC Core §5.3.2: userinfo.sub must equal id_token.sub."""

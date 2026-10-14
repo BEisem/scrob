@@ -1,7 +1,7 @@
 """add oidc_identities table (OIDC hardening — bind (issuer, sub) to users)
 
 Revision ID: oidchard
-Revises: wetrakrsrc
+Revises: wetrakrlists
 Create Date: 2026-10-10
 
 Introduces a per-identity row so SSO logins resolve on the IdP's stable
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 
 
 revision = "oidchard"
-down_revision = "wetrakrsrc"
+down_revision = "wetrakrlists"
 branch_labels = None
 depends_on = None
 

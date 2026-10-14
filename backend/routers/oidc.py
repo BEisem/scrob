@@ -153,12 +153,18 @@ async def _resolve_user(
     ):
         link_candidates.append(("identifier", legacy_identifier))
 
+    # With id_token validation on, an IdP that omits email_verified is not
+    # trusted to have verified the address: linking a local account by email
+    # needs an explicit true. Compat mode keeps the old, laxer behaviour.
+    require_verified = id_token_validation_available()
+    link_refused = False
     for kind, value in link_candidates:
         user = (await db.execute(select(User).where(User.email == value))).scalar_one_or_none()
         if not user:
             continue
-        if kind == "email" and email_verified is False:
-            logger.warning("OIDC: refusing to link email=%s (email_verified=false)", value)
+        if kind == "email" and (email_verified is False or (require_verified and email_verified is not True)):
+            logger.warning("OIDC: refusing to link email=%s (email not verified)", value)
+            link_refused = True
             continue
         if issuer and subject:
             db.add(OidcIdentity(
@@ -168,6 +174,11 @@ async def _resolve_user(
             ))
             logger.info("OIDC: linked user_id=%s to issuer=%s via %s", user.id, issuer, kind)
         return user
+
+    if link_refused:
+        # The address belongs to an existing account we may not link to; creating
+        # a second user with it would only trip the unique email constraint.
+        raise HTTPException(status_code=403, detail="Email address is not verified by the identity provider")
 
     if not app_settings.oidc_auto_create_users:
         raise HTTPException(status_code=403, detail="No account found for this identity")
@@ -319,6 +330,10 @@ async def oidc_exchange(
             if id_token_validation_available():
                 if not id_token:
                     raise HTTPException(status_code=400, detail="IdP did not return an id_token")
+                # verify_id_token only checks the nonce when one is supplied, so a
+                # missing one must be refused here or the replay check is skipped.
+                if not payload.nonce:
+                    raise HTTPException(status_code=400, detail="Missing nonce")
                 try:
                     claims = await verify_id_token(
                         id_token,
@@ -379,13 +394,18 @@ async def oidc_exchange(
         # Two near-simultaneous first logins for the same (issuer, sub) race
         # on the unique index; retry picks up the row the winner just wrote.
         await db.rollback()
-        user = await _resolve_user(
-            db,
-            issuer=issuer, subject=subject, email=email,
-            email_verified=bool(email_verified) if email_verified is not None else None,
-            preferred_username=preferred_username, legacy_identifier=legacy_identifier,
-        )
-        await db.commit()
+        try:
+            user = await _resolve_user(
+                db,
+                issuer=issuer, subject=subject, email=email,
+                email_verified=bool(email_verified) if email_verified is not None else None,
+                preferred_username=preferred_username, legacy_identifier=legacy_identifier,
+            )
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            logger.warning("OIDC: could not create or link an account for issuer=%s sub=%s", issuer, subject)
+            raise HTTPException(status_code=409, detail="Could not create or link an account for this identity")
 
     return {"access_token": create_access_token(subject=user.id)}
 

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Asymmetric only. ``none`` and HMAC families are never accepted - verifying
 # an HS-signed id_token uses the client secret, which gives us no guarantee
 # the IdP (as opposed to anyone else with the secret) produced the token.
-ALLOWED_ID_TOKEN_ALGS = ("RS256", "RS384", "RS512", "ES256", "ES384", "EdDSA")
+ALLOWED_ID_TOKEN_ALGS = ("RS256", "RS384", "RS512", "ES256", "ES384")
 CLOCK_SKEW_LEEWAY_SECONDS = 120
 _CACHE_TTL_SECONDS = 10 * 60
 
