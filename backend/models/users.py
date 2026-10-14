@@ -165,6 +165,9 @@ class UserSettings(Base):
     # wetrakr_last_push_at, and the pull is skipped while WeTrakr's
     # /sync/last_activities "all" stamp still equals wetrakr_last_activity.
     wetrakr_last_push_at       : Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Own bookmark for list pushes, so a failing list never holds back (or
+    # forces a resend of) the watched/ratings push.
+    wetrakr_last_lists_push_at : Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     wetrakr_last_activity      : Mapped[Optional[str]]      = mapped_column(String(64), nullable=True)
 
     preferences    : Mapped[Optional[dict]] = mapped_column(JSONB)
