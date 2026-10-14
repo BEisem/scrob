@@ -911,6 +911,7 @@ const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
                           { key: "simkl_sync_watched", label: "Watched history" },
                           { key: "simkl_sync_ratings", label: "Ratings" },
                           { key: "simkl_sync_lists",   label: "Lists / Watchlist" },
+                          { key: "simkl_sync_dropped", label: "Dropped shows" },
                         ].map(({ key, label }) => (
                           <label class="flex items-center gap-3 cursor-pointer group">
                             <input type="checkbox" name={key} id={key} checked={settings[key as keyof typeof settings] !== false} class="sync-pref-checkbox w-4 h-4 rounded accent-teal-500 cursor-pointer" />
@@ -930,6 +931,7 @@ const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
                         {[
                           { key: "simkl_push_watched", label: "Watched status" },
                           { key: "simkl_push_ratings", label: "Ratings" },
+                          { key: "simkl_push_dropped", label: "Dropped shows" },
                         ].map(({ key, label }) => (
                           <label class="flex items-center gap-3 cursor-pointer group">
                             <input type="checkbox" name={key} id={key} checked={!!settings[key as keyof typeof settings]} class="sync-pref-checkbox w-4 h-4 rounded accent-teal-500 cursor-pointer" />
@@ -3493,8 +3495,8 @@ const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
               })(),
             };
             const simklSyncKeys = [
-              'simkl_sync_watched', 'simkl_sync_ratings', 'simkl_sync_lists',
-              'simkl_push_watched', 'simkl_push_ratings', 'simkl_scrobble',
+              'simkl_sync_watched', 'simkl_sync_ratings', 'simkl_sync_lists', 'simkl_sync_dropped',
+              'simkl_push_watched', 'simkl_push_ratings', 'simkl_push_dropped', 'simkl_scrobble',
             ];
             for (const key of simklSyncKeys) {
               const el = document.getElementById(key) as HTMLInputElement | null;
@@ -3868,6 +3870,7 @@ const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
               simkl_sync_watched: 'watched history',
               simkl_sync_ratings: 'ratings',
               simkl_sync_lists: 'lists',
+              simkl_sync_dropped: 'dropped shows',
             };
             const pulling: string[] = [];
             document.querySelectorAll('.sync-pref-checkbox').forEach((el: any) => {
@@ -3889,6 +3892,7 @@ const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
             const simklPushLabels: Record<string, string> = {
               simkl_push_watched: 'watched history',
               simkl_push_ratings: 'ratings',
+              simkl_push_dropped: 'dropped shows',
             };
             const pushing: string[] = [];
             document.querySelectorAll('.sync-pref-checkbox').forEach((el: any) => {

@@ -504,8 +504,10 @@ export interface UserSettings {
   simkl_sync_watched: boolean;
   simkl_sync_ratings: boolean;
   simkl_sync_lists: boolean;
+  simkl_sync_dropped: boolean;
   simkl_push_watched: boolean;
   simkl_push_ratings: boolean;
+  simkl_push_dropped: boolean;
   simkl_scrobble: boolean;
 
   // WeTrakr — no client_id field: Scrob ships a single app-owned key server-side

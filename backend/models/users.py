@@ -126,10 +126,12 @@ class UserSettings(Base):
     simkl_sync_watched       : Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,  server_default="true")
     simkl_sync_ratings       : Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,  server_default="true")
     simkl_sync_lists         : Mapped[bool] = mapped_column(Boolean, nullable=False, default=True,  server_default="true")
+    simkl_sync_dropped       : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     # Simkl outbound push flags (Scrob → Simkl)
     simkl_push_watched       : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     simkl_push_ratings       : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    simkl_push_dropped       : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     simkl_scrobble           : Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     # Simkl auto sync/push interval, in hours (null = disabled)

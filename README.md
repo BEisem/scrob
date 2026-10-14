@@ -504,8 +504,10 @@ Scrob signs in with Simkl's AUTH V2 device flow through its own Simkl app, and r
 | Simkl → Scrob | **Watched history** | Imports watched movies and episodes. |
 | Simkl → Scrob | **Ratings** | Imports ratings. |
 | Simkl → Scrob | **Lists / Watchlist** | Imports "plan to watch" items into a managed **Simkl - Watchlist** list. |
+| Simkl → Scrob | **Dropped shows** | Marks shows you dropped on Simkl as dropped in Scrob. Only shows Scrob already knows are marked, and a show un-dropped on Simkl is not un-dropped in Scrob. Off by default. |
 | Scrob → Simkl | **Watched status** | Pushes watched and unwatched changes made in Scrob or imported from another connected provider. |
 | Scrob → Simkl | **Ratings** | Pushes rating changes. |
+| Scrob → Simkl | **Dropped shows** | Moves shows you drop in Scrob to Simkl's Dropped list, and the manual **Push** or **Auto Push** adds any that are missing. Un-dropping in Scrob moves a show that is still in Simkl's Dropped list to **Completed** (ended and fully watched), **Watching** (some episodes watched) or **On Hold** (nothing watched). A show you have since moved to another list on Simkl is left alone. Off by default. |
 | Scrob → Simkl | **Live scrobbling** | Pushes playback start/stop events from webhooks and manual scrobble sessions in real time. |
 
 The manual **Push** action sends the complete enabled watched-history and ratings snapshot, in batches of 50 items per request. Collection membership and the Simkl watchlist are not pushed back to Simkl.

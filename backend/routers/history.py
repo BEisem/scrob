@@ -1710,8 +1710,49 @@ async def refresh_next_up(
     )
 
 
+_ENDED_SHOW_STATUSES = {"ended", "canceled", "cancelled"}
+
+
+async def _simkl_status_for_undropped_show(db: AsyncSession, user_id: int, tmdb_id: int) -> str:
+    """The Simkl list an un-dropped show should land in (#474):
+
+    - completed: the show has ended and every aired episode is watched;
+    - watching: at least one episode watched;
+    - hold: nothing watched. Not plantowatch, which Scrob would pull into the
+      "Simkl - Watchlist"; not watching, which claims a show was started.
+    """
+    show = (await db.execute(select(Show).where(Show.tmdb_id == tmdb_id))).scalar_one_or_none()
+    if not show:
+        return "hold"
+
+    rows = (await db.execute(
+        select(Media.season_number, func.count(func.distinct(Media.episode_number)))
+        .join(WatchEvent, WatchEvent.media_id == Media.id)
+        .where(
+            WatchEvent.user_id == user_id,
+            WatchEvent.completed == True,
+            Media.show_id == show.id,
+            Media.media_type == MediaType.episode,
+            Media.season_number.isnot(None),
+            Media.season_number != 0,
+        )
+        .group_by(Media.season_number)
+    )).all()
+    watched_per_season = {season: count for season, count in rows}
+    if not watched_per_season:
+        return "hold"
+
+    season_ep_counts = capped_season_episode_counts(show)
+    total = sum(cnt for sn, cnt in season_ep_counts.items() if sn != 0)
+    watched = sum(min(watched_per_season.get(sn, 0), cnt) for sn, cnt in season_ep_counts.items() if sn != 0)
+    ended = (show.status or "").strip().lower() in _ENDED_SHOW_STATUSES
+    if ended and total > 0 and watched >= total:
+        return "completed"
+    return "watching"
+
+
 async def _push_show_dropped_to_providers(db: AsyncSession, settings: UserSettings, tmdb_id: int, *, remove: bool) -> None:
-    """Best-effort push of a show's dropped state to Trakt/MDBList - never
+    """Best-effort push of a show's dropped state to Trakt/MDBList/Simkl - never
     raises, mirrors _push_list_item_to_trakt's error-swallowing pattern
     (routers/lists.py) since a failed provider push shouldn't block the local
     drop/undrop action itself."""
@@ -1725,6 +1766,30 @@ async def _push_show_dropped_to_providers(db: AsyncSession, settings: UserSettin
                 await trakt_client.add_to_hidden(settings.trakt_client_id, token, "dropped", tmdb_id)
         except Exception as exc:
             logger.warning("Failed to push dropped show to Trakt (tmdb_id=%s, remove=%s): %s", tmdb_id, remove, exc)
+
+    if settings.simkl_push_dropped and settings.simkl_access_token and settings.simkl_client_id:
+        try:
+            from core import simkl as simkl_client
+            if not remove:
+                await simkl_client.add_shows_to_dropped(
+                    settings.simkl_client_id, settings.simkl_access_token, [tmdb_id]
+                )
+            else:
+                # Simkl has no undrop call: a show leaves Dropped by being moved
+                # to another list. Only touch it if it is actually dropped there,
+                # so an undrop never overwrites a status set on Simkl itself.
+                dropped_there = await simkl_client.get_dropped_show_tmdb_ids(
+                    settings.simkl_client_id, settings.simkl_access_token
+                )
+                if tmdb_id in dropped_there:
+                    status = await _simkl_status_for_undropped_show(db, settings.user_id, tmdb_id)
+                    await simkl_client.set_show_list_status(
+                        settings.simkl_client_id, settings.simkl_access_token, [(tmdb_id, status)]
+                    )
+        except Exception as exc:
+            logger.warning(
+                "Failed to push dropped show to Simkl (tmdb_id=%s, remove=%s): %s", tmdb_id, remove, exc
+            )
 
     if settings.mdblist_push_dropped and settings.mdblist_api_key:
         from core import mdblist as mdblist_client

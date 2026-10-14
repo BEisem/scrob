@@ -175,8 +175,10 @@ class UserSettings(BaseModel):
     simkl_sync_watched: Optional[bool] = None
     simkl_sync_ratings: Optional[bool] = None
     simkl_sync_lists: Optional[bool] = None
+    simkl_sync_dropped: Optional[bool] = None
     simkl_push_watched: Optional[bool] = None
     simkl_push_ratings: Optional[bool] = None
+    simkl_push_dropped: Optional[bool] = None
     simkl_scrobble: Optional[bool] = None
     simkl_auto_sync_interval: Optional[float] = None
     simkl_auto_push_interval: Optional[float] = None
