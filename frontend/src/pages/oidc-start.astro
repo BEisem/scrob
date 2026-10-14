@@ -12,6 +12,8 @@ let errorMsg = "";
 const rawNext = Astro.url.searchParams.get("next") || "";
 const nextPath = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
 
+const remember = Astro.url.searchParams.get("remember") === "1";
+
 try {
   const { auth_url, state, code_verifier, nonce } = await api.auth.oidcAuthorize();
 
@@ -29,6 +31,9 @@ try {
   }
   if (nonce) {
     Astro.cookies.set("oidc_nonce", nonce, cookieOpts);
+  }
+  if (remember) {
+    Astro.cookies.set("oidc_remember", "1", cookieOpts);
   }
 
   return Astro.redirect(auth_url);

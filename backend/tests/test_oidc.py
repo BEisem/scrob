@@ -177,6 +177,22 @@ class _OidcTestBase(unittest.IsolatedAsyncioTestCase):
 class HardenedExchangeTests(_OidcTestBase):
     hardened = True
 
+    async def test_remember_issues_a_longer_lived_session(self):
+        claims = {"iss": "https://provider.example", "sub": "u1", "email": "new@example.com", "email_verified": True}
+        token = _FakeResponse(200, {"access_token": "t", "id_token": "x.y.z"})
+        info = _FakeResponse(200, {"sub": "u1", "email": "new@example.com", "email_verified": True})
+        db = _FakeSession([None, None, None, 0])
+
+        with self._patch_verify(claims), \
+             patch("routers.oidc.httpx.AsyncClient", return_value=_FakeHttpClient(token, info)), \
+             patch("routers.oidc.create_access_token", return_value="jwt") as make_token, \
+             patch("core.security.settings.session_remember_days", 30):
+            resp = await oidc.oidc_exchange(_make_request(),
+                oidc.OidcExchangeRequest(code="c", code_verifier="v", nonce="n", remember=True), db)
+
+        self.assertEqual(resp["expires_in"], 30 * 24 * 3600)
+        self.assertEqual(make_token.call_args.kwargs["expires_delta"].days, 30)
+
     async def test_first_oidc_user_becomes_admin(self):
         """Regression for #159: first user auto-created via OIDC is admin."""
         claims = {"iss": "https://provider.example", "sub": "u1", "email": "new@example.com", "email_verified": True}
@@ -193,7 +209,7 @@ class HardenedExchangeTests(_OidcTestBase):
             resp = await oidc.oidc_exchange(_make_request(),
                 oidc.OidcExchangeRequest(code="c", code_verifier="v", nonce="n"), db)
 
-        self.assertEqual(resp, {"access_token": "jwt"})
+        self.assertEqual(resp, {"access_token": "jwt", "expires_in": 7 * 24 * 3600})
         user, identity = db.added  # new user + its oidc_identity
         self.assertTrue(user.is_admin)
         self.assertEqual(identity.issuer, "https://provider.example")
@@ -436,7 +452,7 @@ class CompatExchangeTests(_OidcTestBase):
             resp = await oidc.oidc_exchange(_make_request(),
                 oidc.OidcExchangeRequest(code="c", code_verifier="v"), db)
 
-        self.assertEqual(resp, {"access_token": "jwt"})
+        self.assertEqual(resp, {"access_token": "jwt", "expires_in": 7 * 24 * 3600})
         # No oidc_identity row (no issuer in compat), just the user.
         self.assertEqual(len(db.added), 1)
         self.assertEqual(db.added[0].email, "legacy@example.com")

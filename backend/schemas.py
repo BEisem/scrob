@@ -49,6 +49,8 @@ class Token(BaseModel):
     token_type: str = "bearer"
     requires_2fa: bool = False
     temp_token: Optional[str] = None
+    # Seconds the access token is valid for, so the frontend can size the cookie.
+    expires_in: Optional[int] = None
 
 class TokenPayload(BaseModel):
     sub: Optional[int] = None

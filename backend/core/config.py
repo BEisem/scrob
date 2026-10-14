@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     # Leave at True unless you have evidence of a specific breakage.
     oidc_pkce: bool = True
 
+    # How long a login lasts when "Stay logged in" is ticked. Without it the
+    # session lasts 7 days (core/security.py: ACCESS_TOKEN_EXPIRE_MINUTES).
+    session_remember_days: int = 30
+
     enable_registrations: bool = False
     registration_max_allowed_users: int = 0
 

@@ -34,7 +34,7 @@ from core.oidc import (
     id_token_validation_available,
     verify_id_token,
 )
-from core.security import create_access_token
+from core.security import create_access_token, session_lifetime
 from db import get_db
 from dependencies import get_current_user
 from models.oidc_identity import OidcIdentity
@@ -56,6 +56,7 @@ class OidcExchangeRequest(BaseModel):
     code: str
     code_verifier: Optional[str] = None
     nonce: Optional[str] = None
+    remember: bool = False
 
 
 class OidcConfigResponse(BaseModel):
@@ -407,7 +408,13 @@ async def oidc_exchange(
             logger.warning("OIDC: could not create or link an account for issuer=%s sub=%s", issuer, subject)
             raise HTTPException(status_code=409, detail="Could not create or link an account for this identity")
 
-    return {"access_token": create_access_token(subject=user.id)}
+    lifetime = session_lifetime(payload.remember)
+    return {
+        "access_token": create_access_token(
+            subject=user.id, expires_delta=lifetime, extra_claims={"rem": True} if payload.remember else None
+        ),
+        "expires_in": int(lifetime.total_seconds()),
+    }
 
 
 @router.get("/identities", response_model=list[OidcIdentityItem])

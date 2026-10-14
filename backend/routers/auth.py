@@ -2,7 +2,7 @@ import secrets
 import pyotp
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from core.security import (
     verify_password,
     get_password_hash,
     create_access_token,
+    session_lifetime,
     hash_opaque_token,
     generate_opaque_token,
     ALGORITHM,
@@ -36,7 +37,7 @@ from core.limiter import limiter
 from core.backup import restore_backup
 from core.nuvio import NuvioAPIError, parse_profile_id
 import schemas
-from dependencies import get_current_user, DEVICE_TOKEN_TYPE
+from dependencies import get_current_user, oauth2_scheme, DEVICE_TOKEN_TYPE
 from sqlalchemy.orm import selectinload
 from fastapi import File, UploadFile
 
@@ -217,9 +218,20 @@ async def register(request: Request, user_in: schemas.UserCreate, db: AsyncSessi
 
     return new_user
 
+def _session_claims(remember: bool) -> Optional[dict]:
+    """Extra claims on a user login token. `rem` records "Stay logged in" so
+    a renewed token keeps the same lifetime as the one it replaces."""
+    return {"rem": True} if remember else None
+
+
 @router.post("/login", response_model=schemas.Token)
 @limiter.limit("10/minute")
-async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+async def login(
+    request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    remember: bool = Form(False),
+    db: AsyncSession = Depends(get_db),
+):
     if app_settings.oidc_enabled and app_settings.oidc_disable_password_login:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -247,12 +259,15 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
         temp_token = create_access_token(
             subject=user.id,
             expires_delta=timedelta(minutes=10),
-            extra_claims={"type": "2fa_pending"},
+            extra_claims={"type": "2fa_pending", "remember": remember},
         )
         return {"requires_2fa": True, "temp_token": temp_token}
 
-    access_token = create_access_token(subject=user.id)
-    return {"access_token": access_token, "token_type": "bearer"}
+    lifetime = session_lifetime(remember)
+    access_token = create_access_token(
+        subject=user.id, expires_delta=lifetime, extra_claims=_session_claims(remember)
+    )
+    return {"access_token": access_token, "token_type": "bearer", "expires_in": int(lifetime.total_seconds())}
 
 @router.get("/activate/{token}", include_in_schema=False)
 async def activate_email(token: str, db: AsyncSession = Depends(get_db)):
@@ -334,6 +349,38 @@ async def bootstrap_restore(
         raise HTTPException(status_code=400, detail=str(e))
 
     return {"status": "restored"}
+
+
+# Re-issue a login token with a fresh expiry (sliding session). The frontend
+# calls this on page loads so an active user is never logged out, while an idle
+# one still expires after the normal 7 days (or SESSION_REMEMBER_DAYS).
+SESSION_RENEW_MIN_AGE_SECONDS = 5 * 60
+
+
+@router.post("/session/renew")
+async def renew_session(
+    token: str = Depends(oauth2_scheme),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        payload = jwt.decode(token, app_settings.secret_key, algorithms=[ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Could not validate credentials")
+    # Only plain login tokens slide; typed ones (device grants, 2FA) never do.
+    if payload.get("type"):
+        return {"access_token": None, "expires_in": None}
+
+    remember = bool(payload.get("rem"))
+    lifetime = session_lifetime(remember)
+    remaining = float(payload.get("exp", 0)) - datetime.now(timezone.utc).timestamp()
+    if remaining > lifetime.total_seconds() - SESSION_RENEW_MIN_AGE_SECONDS:
+        # Issued moments ago, nothing to gain from minting another.
+        return {"access_token": None, "expires_in": int(remaining)}
+
+    new_token = create_access_token(
+        subject=current_user.id, expires_delta=lifetime, extra_claims=_session_claims(remember)
+    )
+    return {"access_token": new_token, "expires_in": int(lifetime.total_seconds())}
 
 
 @router.get("/me", response_model=schemas.User)
@@ -1547,8 +1594,10 @@ async def verify_2fa_login(
         if payload.get("type") != "2fa_pending":
             raise credentials_exception
         user_id = int(payload["sub"])
+        remember = bool(payload.get("remember"))
     except (JWTError, ValueError, KeyError):
         raise credentials_exception
+    lifetime = session_lifetime(remember)
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -1557,7 +1606,13 @@ async def verify_2fa_login(
 
     # Try TOTP code
     if pyotp.TOTP(user.totp_secret).verify(req.code, valid_window=1):
-        return {"access_token": create_access_token(subject=user.id), "token_type": "bearer"}
+        return {
+            "access_token": create_access_token(
+                subject=user.id, expires_delta=lifetime, extra_claims=_session_claims(remember)
+            ),
+            "token_type": "bearer",
+            "expires_in": int(lifetime.total_seconds()),
+        }
 
     # Try backup code
     bc_result = await db.execute(
@@ -1571,7 +1626,13 @@ async def verify_2fa_login(
     if bc:
         bc.used = True
         await db.commit()
-        return {"access_token": create_access_token(subject=user.id), "token_type": "bearer"}
+        return {
+            "access_token": create_access_token(
+                subject=user.id, expires_delta=lifetime, extra_claims=_session_claims(remember)
+            ),
+            "token_type": "bearer",
+            "expires_in": int(lifetime.total_seconds()),
+        }
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code")
 

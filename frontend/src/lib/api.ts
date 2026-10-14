@@ -382,6 +382,7 @@ export interface LoginResponse {
   token_type: string;
   requires_2fa: boolean;
   temp_token: string | null;
+  expires_in?: number | null;
 }
 
 export interface TotpSetupData {
@@ -440,6 +441,7 @@ export interface OidcIdentity {
 
 export interface OidcExchangeResponse {
   access_token: string;
+  expires_in?: number;
 }
 
 export type PrivacyLevel = "public" | "friends_only" | "private";
@@ -1269,6 +1271,8 @@ export const api = {
       post<{ message: string }>("/auth/forgot-password", { email }),
     resetPassword: (token: string, new_password: string) =>
       post<{ message: string }>(`/auth/reset-password/${token}`, { new_password }),
+    renewSession: (token: string) =>
+      post<{ access_token: string | null; expires_in: number | null }>("/auth/session/renew", undefined, token),
     me: (token: string) =>
       get<UserProfile>("/auth/me", undefined, token),
     devicePending: (userCode: string, token: string) =>
@@ -1341,7 +1345,7 @@ export const api = {
       get<OidcConfig>("/auth/oidc/config"),
     oidcAuthorize: () =>
       get<OidcAuthorizeResponse>("/auth/oidc/authorize"),
-    oidcExchange: (body: { code: string; code_verifier?: string; nonce?: string }) =>
+    oidcExchange: (body: { code: string; code_verifier?: string; nonce?: string; remember?: boolean }) =>
       post<OidcExchangeResponse>("/auth/oidc/exchange", body),
     oidcIdentities: (token: string) =>
       get<OidcIdentity[]>("/auth/oidc/identities", undefined, token),

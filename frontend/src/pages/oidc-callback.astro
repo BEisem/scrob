@@ -18,6 +18,7 @@ const clearOidcCookies = () => {
   Astro.cookies.delete("oidc_next", { path: "/" });
   Astro.cookies.delete("oidc_code_verifier", { path: "/" });
   Astro.cookies.delete("oidc_nonce", { path: "/" });
+  Astro.cookies.delete("oidc_remember", { path: "/" });
 };
 
 if (!error) {
@@ -27,6 +28,7 @@ if (!error) {
   const codeVerifier = Astro.cookies.get("oidc_code_verifier")?.value;
   const nonce = Astro.cookies.get("oidc_nonce")?.value;
   const storedNext = Astro.cookies.get("oidc_next")?.value ?? "/";
+  const remember = Astro.cookies.get("oidc_remember")?.value === "1";
 
   if (!code) {
     error = "No authorization code returned by provider.";
@@ -37,13 +39,13 @@ if (!error) {
   } else {
     clearOidcCookies();
     try {
-      const { access_token } = await api.auth.oidcExchange({ code, code_verifier: codeVerifier, nonce });
+      const { access_token, expires_in } = await api.auth.oidcExchange({ code, code_verifier: codeVerifier, nonce, remember });
       Astro.cookies.set("token", access_token, {
         path: "/",
         httpOnly: true,
         secure: import.meta.env.PROD,
         sameSite: "lax",
-        maxAge: 60 * 60 * 24 * 7,
+        maxAge: expires_in ?? 60 * 60 * 24 * 7,
       });
       return Astro.redirect(storedNext);
     } catch (e: unknown) {

@@ -295,6 +295,7 @@ Database migrations run automatically on startup - no manual steps required.
 | `DATABASE_URL` | - | **Required** (standard image). PostgreSQL connection string (`postgresql+asyncpg://...`). Optional on the omnibus image - if omitted, the embedded database is used. |
 | `ENABLE_REGISTRATIONS` | `false` | Allow new users to register. The first user can always register regardless of this setting. |
 | `REGISTRATION_MAX_ALLOWED_USERS` | `0` | Maximum number of registered users. `0` = unlimited. |
+| `SESSION_REMEMBER_DAYS` | `30` | How long a login lasts when **Stay logged in** is ticked on the login page, for password and SSO logins. Without it a login lasts 7 days. |
 | `TZ` | `UTC` | Container timezone (e.g. `Europe/Lisbon`). |
 | `PUID` | `1000` | User ID to run the process as. |
 | `PGID` | `1000` | Group ID to run the process as. |
