@@ -317,7 +317,7 @@ async def apply_scrob_import(
                             continue
                         watched_at = _parse_iso(entry.get("watched_at"))
                         if not _is_duplicate_play(media.id, watched_at):
-                            db.add(WatchEvent(user_id=user_id, media_id=media.id, watched_at=watched_at, completed=True, play_count=1))
+                            db.add(WatchEvent(user_id=user_id, media_id=media.id, watched_at=watched_at, completed=True, play_count=1, source="import"))
                             existing_times.setdefault(media.id, []).append(watched_at or datetime.utcnow())
                             stats["movies"] += 1
                         else:
@@ -356,7 +356,7 @@ async def apply_scrob_import(
                             continue
                         watched_at = _parse_iso(entry.get("watched_at"))
                         if not _is_duplicate_play(media.id, watched_at):
-                            event = WatchEvent(user_id=user_id, media_id=media.id, watched_at=watched_at, completed=True, play_count=1)
+                            event = WatchEvent(user_id=user_id, media_id=media.id, watched_at=watched_at, completed=True, play_count=1, source="import")
                             db.add(event)
                             await db.flush()
                             await record_rewatch_progress(db, user_id, media.id, event.id)

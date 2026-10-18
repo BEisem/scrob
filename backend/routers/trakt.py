@@ -695,6 +695,7 @@ async def _apply_trakt_import(
                         if not _is_duplicate_play(existing_times, media.id, watched_at):
                             db.add(WatchEvent(
                                 user_id=user_id,
+                                source="trakt",
                                 media_id=media.id,
                                 watched_at=watched_at,
                                 completed=True,
@@ -782,6 +783,7 @@ async def _apply_trakt_import(
                             if not _is_duplicate_play(existing_times, media.id, watched_at):
                                 event = WatchEvent(
                                     user_id=user_id,
+                                    source="trakt",
                                     media_id=media.id,
                                     watched_at=watched_at,
                                     completed=True,

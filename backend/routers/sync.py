@@ -2660,6 +2660,7 @@ async def sync_items(
                             # -supported state for this column - see Simkl's import path.
                             watch_event = WatchEvent(
                                 user_id=user_id,
+                                source=getattr(source, "value", source),
                                 media_id=media_id_for_watch,
                                 watched_at=watch_state["last_played"],
                                 completed=watch_state["completed"],
@@ -3596,6 +3597,7 @@ async def _backfill_plex_watch_history(
             else:
                 watch_event = WatchEvent(
                     user_id=user_id,
+                    source="plex",
                     media_id=media_id,
                     watched_at=watched_at,
                     completed=True,
@@ -4606,6 +4608,7 @@ async def _apply_nuvio_watch_history(
             continue
         event = WatchEvent(
             user_id=user_id,
+            source="nuvio",
             media_id=media.id,
             watched_at=watched_at,
             completed=True,
@@ -5784,6 +5787,7 @@ async def _apply_arvio_watched_movie(
     if not existing:
         event = WatchEvent(
             user_id=user_id,
+            source="arvio",
             media_id=media.id,
             completed=True,
             watched_at=watched_at or datetime.now(timezone.utc).replace(tzinfo=None),
@@ -5914,6 +5918,7 @@ async def _apply_arvio_watched_episode(
     if not existing:
         event = WatchEvent(
             user_id=user_id,
+            source="arvio",
             media_id=media.id,
             completed=True,
             watched_at=watched_at or datetime.now(timezone.utc).replace(tzinfo=None),

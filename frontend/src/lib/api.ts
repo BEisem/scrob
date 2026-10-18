@@ -260,6 +260,7 @@ export interface WatchEvent {
   watched_at: string | null;
   completed: boolean;
   progress_percent: number | null;
+  source?: string | null;
 }
 
 export interface SyncJob {

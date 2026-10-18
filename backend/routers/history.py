@@ -384,6 +384,7 @@ def format_event(event: WatchEvent | PlaybackProgress, media: Media) -> dict:
         "progress_percent": event.progress_percent,
         "completed": getattr(event, "completed", False),
         "play_count": getattr(event, "play_count", 1),
+        "source": getattr(event, "source", None),
     }
 
     if media.media_type == MediaType.episode and media.show:
@@ -2453,6 +2454,7 @@ async def mark_as_watched(
 
     event = WatchEvent(
         user_id=current_user.id,
+        source="manual",
         media_id=media.id,
         watched_at=watched_at,
         completed=event_in.completed,
@@ -2551,7 +2553,11 @@ async def get_item_events(
     return {
         "watched": watched,
         "events": [
-            {"id": e.id, "watched_at": e.watched_at.isoformat() if e.watched_at else None}
+            {
+                "id": e.id,
+                "watched_at": e.watched_at.isoformat() if e.watched_at else None,
+                "source": e.source,
+            }
             for e in events
         ],
     }
@@ -2893,6 +2899,7 @@ async def mark_season_watched(
         if ep.id not in already_watched:
             event = WatchEvent(
                 user_id=current_user.id,
+                source="manual",
                 media_id=ep.id,
                 watched_at=resolved_watched_at,
                 completed=True,
@@ -3108,6 +3115,7 @@ async def mark_show_watched(
             if ep.id not in already_watched:
                 event = WatchEvent(
                     user_id=current_user.id,
+                    source="manual",
                     media_id=ep.id,
                     watched_at=resolved_watched_at,
                     completed=True,
@@ -3216,6 +3224,7 @@ async def mark_show_watched(
                         if ep.id not in already_watched:
                             event = WatchEvent(
                                 user_id=current_user.id,
+                                source="manual",
                                 media_id=ep.id,
                                 watched_at=resolved_watched_at,
                                 completed=True,
@@ -3625,6 +3634,7 @@ async def auto_complete_manual_sessions(db: AsyncSession) -> None:
             continue
         event = WatchEvent(
             user_id=session.user_id,
+            source="scrob",
             media_id=session.media_id,
             watched_at=now,
             completed=True,
@@ -3677,6 +3687,7 @@ async def complete_manual_session(
 
     event = WatchEvent(
         user_id=current_user.id,
+        source="scrob",
         media_id=media_id,
         watched_at=now,
         completed=True,

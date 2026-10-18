@@ -450,6 +450,7 @@ async def run_simkl_sync(user_id: int, job_id: int) -> None:
                                 watched_at = _parse_watched_at(item.get("last_watched_at"))
                                 db.add(WatchEvent(
                                     user_id=user_id,
+                                    source="simkl",
                                     media_id=media.id,
                                     # A dateless Simkl play stays dateless (the
                                     # column is nullable, same as the Trakt
@@ -515,6 +516,7 @@ async def run_simkl_sync(user_id: int, job_id: int) -> None:
                                             watched_at = _parse_watched_at(ep_entry.get("watched_at"))
                                             event = WatchEvent(
                                                 user_id=user_id,
+                                                source="simkl",
                                                 media_id=media.id,
                                                 # See the movie branch above (#127).
                                                 watched_at=watched_at,

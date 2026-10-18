@@ -625,6 +625,7 @@ async def run_wetrakr_sync(user_id: int, job_id: int) -> None:
                                 watched_at = None if item.get("watched_at_unknown") else _parse_wetrakr_datetime(item.get("watched_at"))
                                 db.add(WatchEvent(
                                     origin="wetrakr",
+                                    source="wetrakr",
                                     user_id=user_id,
                                     media_id=media.id,
                                     watched_at=watched_at,
@@ -703,6 +704,7 @@ async def run_wetrakr_sync(user_id: int, job_id: int) -> None:
                                         watched_at = None if entry.get("watched_at_unknown") else _parse_wetrakr_datetime(entry.get("watched_at"))
                                         event = WatchEvent(
                                             origin="wetrakr",
+                                            source="wetrakr",
                                             user_id=user_id,
                                             media_id=media.id,
                                             watched_at=watched_at,
