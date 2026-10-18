@@ -326,6 +326,7 @@ export interface UserProfile {
   is_admin: boolean;
   api_key: string;
   totp_enabled: boolean;
+  has_password: boolean;
   created_at: string;
 }
 

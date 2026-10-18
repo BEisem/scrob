@@ -31,7 +31,7 @@ from core.security import (
     ALGORITHM,
 )
 from core.config import settings as app_settings
-from core.email import send_activation_email, send_password_reset_email
+from core.email import send_activation_email, send_email_change_email, send_password_reset_email
 from core.url_validator import validate_service_url
 from core.limiter import limiter
 from core.backup import restore_backup
@@ -269,6 +269,26 @@ async def login(
     )
     return {"access_token": access_token, "token_type": "bearer", "expires_in": int(lifetime.total_seconds())}
 
+async def _email_in_use(db: AsyncSession, email: str, exclude_user_id: int) -> bool:
+    result = await db.execute(
+        select(User.id).where(func.lower(User.email) == email.lower(), User.id != exclude_user_id)
+    )
+    return result.first() is not None
+
+
+async def _apply_activation(db: AsyncSession, user: User, activation: EmailActivation) -> bool:
+    """Confirms the user's email via a clicked activation link. A link for a
+    different address than the one on file is a pending email change (#471):
+    the address switches only now, once the new inbox is proven. Returns False
+    when that address got taken by someone else in the meantime."""
+    if activation.email.lower() != user.email.lower():
+        if await _email_in_use(db, activation.email, user.id):
+            return False
+        user.email = activation.email
+    user.email_confirmed = True
+    return True
+
+
 @router.get("/activate/{token}", include_in_schema=False)
 async def activate_email(token: str, db: AsyncSession = Depends(get_db)):
     frontend = app_settings.server_url
@@ -286,11 +306,14 @@ async def activate_email(token: str, db: AsyncSession = Depends(get_db)):
 
     user_result = await db.execute(select(User).where(User.id == activation.user_id))
     user = user_result.scalar_one_or_none()
+    taken = False
     if user:
-        user.email_confirmed = True
+        taken = not await _apply_activation(db, user, activation)
     await db.delete(activation)
     await db.commit()
 
+    if taken:
+        return RedirectResponse(f"{frontend}/auth/activate/{token}?error=taken")
     return RedirectResponse(f"{frontend}/auth/activate/{token}?success=true")
 
 
@@ -311,11 +334,14 @@ async def activate_email_api(token: str, db: AsyncSession = Depends(get_db)):
 
     user_result = await db.execute(select(User).where(User.id == activation.user_id))
     user = user_result.scalar_one_or_none()
+    taken = False
     if user:
-        user.email_confirmed = True
+        taken = not await _apply_activation(db, user, activation)
     await db.delete(activation)
     await db.commit()
 
+    if taken:
+        raise HTTPException(status_code=400, detail="taken")
     return {"success": True}
 
 
@@ -890,6 +916,50 @@ async def change_password(
     current_user.password_hash = get_password_hash(password_in.new_password)
     await db.commit()
     return {"status": "password updated"}
+
+@router.post("/change-email")
+@limiter.limit("5/minute")
+async def change_email(
+    request: Request,
+    email_in: schemas.EmailChange,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Change the account email (#471). Requires the current password when the
+    account has one (an OIDC-created account with none can change it directly,
+    same as change-password). With email validation on, the new address is
+    only switched in once its confirmation link is clicked; otherwise it
+    applies immediately."""
+    if current_user.password_hash is not None:
+        if not email_in.current_password or not verify_password(email_in.current_password, current_user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Incorrect current password",
+            )
+
+    new_email = email_in.new_email
+    if new_email.lower() == current_user.email.lower():
+        raise HTTPException(status_code=400, detail="That is already your email address")
+    if await _email_in_use(db, new_email, current_user.id):
+        raise HTTPException(status_code=400, detail="That email address is already in use")
+
+    if not app_settings.require_email_validation:
+        current_user.email = new_email
+        await db.commit()
+        return {"status": "email updated", "email": new_email}
+
+    # Only the latest request stays valid.
+    await db.execute(delete(EmailActivation).where(EmailActivation.user_id == current_user.id))
+    token = secrets.token_urlsafe(32)
+    db.add(EmailActivation(user_id=current_user.id, email=new_email, token=token))
+    await db.commit()
+    try:
+        await send_email_change_email(new_email, token)
+    except Exception as exc:
+        logger.error("Failed to send email change confirmation to %s: %s", new_email, exc)
+        raise HTTPException(status_code=502, detail="Could not send the confirmation email")
+    return {"status": "confirmation sent", "email": new_email}
+
 
 @router.post("/api-key/regenerate", response_model=schemas.User)
 async def regenerate_api_key(

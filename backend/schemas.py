@@ -397,6 +397,10 @@ class PasswordUpdate(BaseModel):
     current_password: Optional[str] = None
     new_password: str
 
+class EmailChange(BaseModel):
+    new_email: EmailStr
+    current_password: Optional[str] = None
+
 class WatchEventCreate(BaseModel):
     # Any one of media_id / tmdb_id / tvdb_id identifies the item (see
     # core/identity.py). tmdb_id used to be mandatory; a TVDB-only episode
