@@ -228,6 +228,7 @@ class UserSettings(BaseModel):
     blur_explicit: Optional[bool] = None
     time_format_24h: Optional[bool] = None
     use_hls_player: Optional[bool] = None
+    show_play_button: Optional[bool] = None
     shuffle_next_up: Optional[bool] = None
     minimalist_next_up: Optional[bool] = None
     hide_watched_from_recently_added: Optional[bool] = None

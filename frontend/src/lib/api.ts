@@ -540,6 +540,7 @@ export interface UserSettings {
   blur_explicit: boolean;
   time_format_24h: boolean;
   use_hls_player: boolean;
+  show_play_button: boolean;
   shuffle_next_up: boolean;
   minimalist_next_up: boolean;
   rate_prompt_movies: boolean;
