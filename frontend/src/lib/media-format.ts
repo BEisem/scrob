@@ -11,6 +11,13 @@ export function formatEpisodesLeft(
   return `${label} · ${runtime}`;
 }
 
+export function formatWatchTime(minutes?: number | null): string | null {
+  if (!minutes || minutes <= 0) return null;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+
 export function formatSeasonTitle(seasonNumber: number, name?: string | null): string {
   const isSpecials = seasonNumber === 0;
   const fallback = isSpecials ? "Specials" : `Season ${seasonNumber}`;
