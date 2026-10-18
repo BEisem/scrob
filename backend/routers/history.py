@@ -1807,7 +1807,11 @@ def _iso_utc_now() -> str:
 
 
 class DropShowRequest(BaseModel):
-    show_id: int
+    # dropped_shows stores local Show.id. A show opened straight from TMDB
+    # (nothing watched or collected yet) has no local row, so it sends
+    # tmdb_id and we resolve/create one (#480).
+    show_id: int | None = None
+    tmdb_id: int | None = None
 
 
 @router.post("/drop/show")
@@ -1822,15 +1826,28 @@ async def drop_show(
     settings = settings_result.scalar_one_or_none()
     if not settings:
         raise HTTPException(status_code=404, detail="Settings not found")
+
+    show = None
+    if body.show_id and body.show_id > 0:
+        show = (await db.execute(select(Show).where(Show.id == body.show_id))).scalar_one_or_none()
+    elif body.tmdb_id:
+        show = (await db.execute(select(Show).where(Show.tmdb_id == body.tmdb_id))).scalars().first()
+        if not show:
+            from routers.trakt import _get_or_create_show
+            api_key = await get_user_tmdb_key(db, current_user.id)
+            show = await _get_or_create_show(db, body.tmdb_id, "", api_key)
+            if not show:
+                raise HTTPException(status_code=404, detail="Show not found on TMDB")
+    if not show:
+        raise HTTPException(status_code=400, detail="show_id or tmdb_id is required")
+
     dropped = list(settings.dropped_shows or [])
-    if body.show_id not in dropped:
-        dropped.append(body.show_id)
+    if show.id not in dropped:
+        dropped.append(show.id)
         settings.dropped_shows = dropped
         flag_modified(settings, "dropped_shows")
-        await db.commit()
+    await db.commit()
 
-    show_result = await db.execute(select(Show).where(Show.id == body.show_id))
-    show = show_result.scalar_one_or_none()
     if show and show.tmdb_id:
         await _push_show_dropped_to_providers(db, settings, show.tmdb_id, remove=False)
     return {"status": "ok"}

@@ -1527,7 +1527,10 @@ const bottomNavItem = (active: boolean) =>
       // "Hide from Next Up" only makes sense for shows - movies have no
       // Next Up concept to hide from.
       const hideBtn = document.getElementById('drop-modal-hide')!;
-      hideBtn.classList.toggle('hidden', !isSeries);
+      // A show with no local row yet (nothing watched or collected, #480) can't
+      // be in Next Up either.
+      const hasLocalShow = !!showId && Number(showId) > 0;
+      hideBtn.classList.toggle('hidden', !isSeries || !hasLocalShow);
 
       hideBtn.onclick = async () => {
         closeDropModal();
@@ -1543,7 +1546,12 @@ const bottomNavItem = (active: boolean) =>
         closeDropModal();
         try {
           if (isSeries) {
-            await apiFetch('/history/drop/show', 'POST', { show_id: Number(showId) });
+            // A show opened straight from TMDB has no local id yet - send the
+            // tmdb id so the backend can resolve/create one (#480).
+            const body = hasLocalShow
+              ? { show_id: Number(showId) }
+              : { tmdb_id: Number(tmdbId) };
+            await apiFetch('/history/drop/show', 'POST', body);
           } else {
             // A movie opened straight from TMDB has no local id yet - send the
             // tmdb id so the backend can resolve/create one (#330).
