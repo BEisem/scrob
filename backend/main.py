@@ -21,6 +21,7 @@ from core.limiter import limiter
 
 from sqlalchemy import or_, select, update, delete
 from models.sync import SyncJob, SyncStatus
+from core.job_retention import prune_old_sync_jobs
 from models.base import CollectionSource
 from models.playback_session import PlaybackSession
 
@@ -108,11 +109,23 @@ async def _auto_sync_scheduler():
         "stremio": run_stremio_sync,
     }
 
+    import logging
+    log = logging.getLogger("uvicorn.error")
+    last_prune = datetime.min
     while True:
         await asyncio.sleep(check_interval)
         try:
             async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
             async with async_session() as db:
+                if datetime.now(timezone.utc).replace(tzinfo=None) - last_prune >= timedelta(hours=1):
+                    last_prune = datetime.now(timezone.utc).replace(tzinfo=None)
+                    try:
+                        pruned = await prune_old_sync_jobs(db)
+                        if pruned:
+                            log.info(f"Pruned {pruned} sync jobs older than 7 days")
+                    except Exception as e:
+                        log.error(f"Sync job pruning failed: {e}")
+                        await db.rollback()
                 result = await db.execute(
                     select(MediaServerConnection).where(
                         or_(
@@ -772,6 +785,10 @@ async def lifespan(app: FastAPI):
         )
         await db.execute(delete(PlaybackSession))
         await db.commit()
+        try:
+            await prune_old_sync_jobs(db)
+        except Exception:
+            await db.rollback()
 
     scheduler_task = asyncio.create_task(_auto_sync_scheduler())
     watchlist_task = asyncio.create_task(_watchlist_poller())
