@@ -46,6 +46,7 @@ from core.watchlist_reconcile import compute_new_baseline, media_key, plan_watch
 from models.rewatch import ShowRewatch, RewatchProgress
 
 from dependencies import get_current_user, get_current_user_or_api_key
+from core.timeutil import utcnow
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -1498,7 +1499,7 @@ async def _fan_out_changes_to_other_connections(
                     _payload_item(
                         media,
                         show=shows_by_id.get(media.show_id),
-                        watched_at=watched_at_by_media.get(media_id, datetime.utcnow()),
+                        watched_at=watched_at_by_media.get(media_id, utcnow()),
                     )
                     if media
                     else None
@@ -1524,7 +1525,7 @@ async def _fan_out_changes_to_other_connections(
                     _payload_item(
                         media,
                         show=shows_by_id.get(media.show_id),
-                        collected_at=collected_at_by_media.get(media_id, datetime.utcnow()),
+                        collected_at=collected_at_by_media.get(media_id, utcnow()),
                     )
                     if media
                     else None
@@ -3303,7 +3304,7 @@ async def _record_plex_pending_push(user_id: int, media_id: int) -> None:
         stmt = insert(PlexPendingPush).values(
             user_id=user_id,
             media_id=media_id,
-            pushed_at=datetime.utcnow(),
+            pushed_at=utcnow(),
         )
         stmt = stmt.on_conflict_do_update(
             index_elements=["user_id", "media_id"],
@@ -3520,7 +3521,7 @@ async def _backfill_plex_watch_history(
             select(PlexPendingPush.id, PlexPendingPush.media_id, PlexPendingPush.pushed_at)
             .where(
                 PlexPendingPush.user_id == user_id,
-                PlexPendingPush.pushed_at >= datetime.utcnow() - PLEX_PENDING_PUSH_MAX_AGE,
+                PlexPendingPush.pushed_at >= utcnow() - PLEX_PENDING_PUSH_MAX_AGE,
             )
         )
         # media_id -> list of (pending_push_id, pushed_at) still awaiting their echo
@@ -3535,7 +3536,7 @@ async def _backfill_plex_watch_history(
         await db.execute(
             delete(PlexPendingPush).where(
                 PlexPendingPush.user_id == user_id,
-                PlexPendingPush.pushed_at < datetime.utcnow() - PLEX_PENDING_PUSH_MAX_AGE,
+                PlexPendingPush.pushed_at < utcnow() - PLEX_PENDING_PUSH_MAX_AGE,
             )
         )
 
@@ -4193,7 +4194,7 @@ async def _run_plex_sync(user_id: int, job_id: int, movie_limit: int, show_limit
                                         continue
                                     if current:
                                         current.rating = rating_value
-                                        current.rated_at = datetime.utcnow()
+                                        current.rated_at = utcnow()
                                     else:
                                         current = Rating(
                                             user_id=user_id,
@@ -4243,7 +4244,7 @@ async def _run_plex_sync(user_id: int, job_id: int, movie_limit: int, show_limit
                                         continue
                                     if current:
                                         current.rating = rating_value
-                                        current.rated_at = datetime.utcnow()
+                                        current.rated_at = utcnow()
                                     else:
                                         current = Rating(
                                             user_id=user_id,
@@ -4709,7 +4710,7 @@ async def _apply_nuvio_progress(
         progress_percent = min(1.0, position_ms / duration_ms)
         progress = existing.get(media.id)
         if 0.05 <= progress_percent < 0.90:
-            updated_at = _nuvio_datetime(row.get("last_watched")) or datetime.utcnow()
+            updated_at = _nuvio_datetime(row.get("last_watched")) or utcnow()
             if progress:
                 progress.progress_percent = progress_percent
                 progress.progress_seconds = position_ms // 1000

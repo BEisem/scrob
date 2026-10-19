@@ -382,7 +382,7 @@ async def _emby_progress_poller():
                         row.progress_percent = round(position / runtime, 4)
                         row.progress_seconds = int(position / 10_000_000)
                         row.state = "paused" if play_state.get("IsPaused") else "playing"
-                        row.updated_at = datetime.utcnow()
+                        row.updated_at = utcnow()
                         # Commit per-row via the shared helper (routers/webhooks.py):
                         # a PlaybackStop webhook can delete this same session between
                         # the select above and this write, which SQLAlchemy surfaces
@@ -832,6 +832,7 @@ async def lifespan(app: FastAPI):
         pass
 
 from core.config import settings
+from core.timeutil import utcnow
 
 # Rate limiter — keyed by client IP, in-memory storage (suitable for single-instance deploy).
 # API docs (docs_url/redoc_url/openapi_url) are disabled here and re-added below behind
