@@ -15,21 +15,27 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 ENV TZ=UTC
 
-# Install Node.js 22, supervisord, gosu, tzdata, and PostgreSQL
+# Install gosu, tzdata, and PostgreSQL
 # Suppress the default cluster creation — we manage our own data dir at /app/postgres/data
 RUN mkdir -p /etc/postgresql-common \
     && echo "create_main_cluster = false" > /etc/postgresql-common/createcluster.conf
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    curl \
     gosu \
-    supervisor \
     tzdata \
     postgresql \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && apt-get purge -y curl \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 is copied from the official image instead of installed from
+# NodeSource: only the `node` binary is needed at runtime, and the NodeSource
+# package brings npm (with its own bundled dependencies) and a whole system
+# Python (3.13) along with it.
+COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+
+# supervisor comes from PyPI rather than apt, which would also drag in that
+# system Python. pip is dropped afterwards since nothing installs packages at
+# runtime, and it vendors libraries of its own.
+RUN pip install --no-cache-dir "supervisor>=4.3" \
+    && pip uninstall -y pip
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -52,7 +58,7 @@ COPY --from=frontend-builder /app/frontend/package.json ./
 # ── Entrypoint & supervisor configs ───────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
 COPY entrypoint.omnibus.sh /entrypoint.omnibus.sh
-COPY supervisord.conf /etc/supervisor/conf.d/scrob.conf
+COPY supervisord.conf /etc/supervisor/supervisord.conf
 COPY supervisord.omnibus.conf /etc/supervisor/supervisord.omnibus.conf
 RUN chmod +x /entrypoint.sh /entrypoint.omnibus.sh
 

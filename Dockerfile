@@ -15,15 +15,24 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 ENV TZ=UTC
 
-# Install Node.js 22, supervisord, gosu, curl and tzdata
+# Install gosu, curl (for the healthcheck) and tzdata
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     curl \
     gosu \
-    supervisor \
     tzdata \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Node.js 22 is copied from the official image instead of installed from
+# NodeSource: only the `node` binary is needed at runtime, and the NodeSource
+# package brings npm (with its own bundled dependencies) and a whole system
+# Python (3.13) along with it.
+COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+
+# supervisor comes from PyPI rather than apt, which would also drag in that
+# system Python. pip is dropped afterwards since nothing installs packages at
+# runtime, and it vendors libraries of its own.
+RUN pip install --no-cache-dir "supervisor>=4.3" \
+    && pip uninstall -y pip
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
@@ -36,6 +45,9 @@ RUN uv sync --frozen --no-dev --no-cache
 
 COPY backend/ .
 
+# The entrypoint chowns this; it must exist even when no volume is mounted over it
+RUN mkdir -p /app/backend/data
+
 # ── Frontend ──────────────────────────────────────────────────────────────────
 WORKDIR /app/frontend
 
@@ -45,7 +57,7 @@ COPY --from=frontend-builder /app/frontend/package.json ./
 
 # ── Entrypoint & supervisor config ────────────────────────────────────────────
 COPY entrypoint.sh /entrypoint.sh
-COPY supervisord.conf /etc/supervisor/conf.d/scrob.conf
+COPY supervisord.conf /etc/supervisor/supervisord.conf
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 7330

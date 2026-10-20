@@ -74,7 +74,7 @@ if [ -z "$DATABASE_URL" ]; then
     gosu scrob pg_ctl -D "$PGDATA" stop -m fast
 
     echo "Starting Scrob with embedded PostgreSQL (frontend :7330, backend 127.0.0.1:${BACKEND_PORT})..."
-    exec gosu scrob /usr/bin/supervisord -n -c /etc/supervisor/supervisord.omnibus.conf
+    exec gosu scrob /usr/local/bin/supervisord -n -c /etc/supervisor/supervisord.omnibus.conf
 
 else
     # ── External database mode — behaves identically to the standard image ─────
@@ -83,5 +83,5 @@ else
     gosu scrob .venv/bin/python -m alembic upgrade head
 
     echo "Starting Scrob (frontend :7330, backend 127.0.0.1:${BACKEND_PORT})..."
-    exec gosu scrob /usr/bin/supervisord -n -c /etc/supervisor/supervisord.conf
+    exec gosu scrob /usr/local/bin/supervisord -n -c /etc/supervisor/supervisord.conf
 fi
