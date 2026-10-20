@@ -5691,11 +5691,13 @@ const sonarrConfigured   = !!(settings.sonarr_url && settings.sonarr_token);
       // Pull unmatched-TMDB / enrichment vs push lookup-failed must not share a
       // job: the latest completed job with warnings used to be the Push, which
       // hid real Pull unmatched rows and painted lookup misses as Match-to-TMDB (#304).
+      // The latest completed job is authoritative even when it has no warnings:
+      // skipping clean jobs kept showing the warnings of an older run after a
+      // later run had fixed them.
       const latestJobFor = (connId: string, push: boolean) =>
         jobs.find((j: any) =>
           String(j.connection_id) === connId
           && j.status === 'completed'
-          && j.warnings?.length > 0
           && (push ? j.job_type === 'push' : j.job_type === 'pull')
         );
 
