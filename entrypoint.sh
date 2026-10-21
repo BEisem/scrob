@@ -8,8 +8,9 @@ export BACKEND_PORT
 
 # Timezone
 if [ -n "$TZ" ]; then
-    ln -snf /usr/share/zoneinfo/"$TZ" /etc/localtime
-    echo "$TZ" > /etc/timezone
+    # Not fatal: /etc/localtime may be a mounted file (k8tz, -v /etc/localtime:...) that busybox ln cannot replace
+    ln -snf /usr/share/zoneinfo/"$TZ" /etc/localtime 2>/dev/null || echo "Could not set /etc/localtime, keeping the existing one"
+    echo "$TZ" > /etc/timezone 2>/dev/null || true
 fi
 
 # Fix ownership so the scrob user can write to the data directory
