@@ -2107,6 +2107,16 @@ async def sync_items(
     items = _expand_multi_episode_items(items, media_type, source)
     print(f"  Syncing {len(items)} {media_type.value}s from {source.value}...")
 
+    # Fix #497: multi-episode files have been expanded; update total_items to match
+    # the actual count sync_items will process, so the progress counter ends at 100%.
+    if job_id and source in (CollectionSource.jellyfin, CollectionSource.emby):
+        await db.execute(
+            update(SyncJob)
+            .where(SyncJob.id == job_id)
+            .values(total_items=len(items))
+        )
+        await db.commit()
+
     # ── Phase 1: Pre-load existing data (replaces all N+1 queries) ────────────
 
     # All existing CollectionFiles for this user+source: (source_id, episode_number) →
@@ -2721,14 +2731,16 @@ async def sync_items(
                     media_by_tmdb[(new_media.tmdb_id, new_media.media_type)] = new_media
 
         except Exception as e:
-            if str(e) == "Skip this item (unmatched)":
-                continue
-            # Savepoint already rolled back — remove the enrichment entry we may have queued
-            if new_media and new_media_for_enrichment and new_media_for_enrichment[-1][0] is new_media:
-                new_media_for_enrichment.pop()
-            stats["errors"] += 1
-            print(f"    Error syncing item {i}: {e}")
+            if str(e) != "Skip this item (unmatched)":
+                # Savepoint already rolled back — remove the enrichment entry we may have queued
+                if new_media and new_media_for_enrichment and new_media_for_enrichment[-1][0] is new_media:
+                    new_media_for_enrichment.pop()
+                stats["errors"] += 1
+                print(f"    Error syncing item {i}: {e}")
+            # else: unmatched item, silently skipped (warning already added above)
 
+        # Fix #494: batch bookkeeping must run for every item (even skipped ones),
+        # otherwise a skip at a batch boundary loses the entire batch from processed_items.
         if (i + 1) % BATCH_SIZE == 0:
             await flush_collection_heals()
             await db.commit()
