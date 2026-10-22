@@ -3535,6 +3535,14 @@ async def _handle_kodi_webhook(request: Request, db: AsyncSession, user: User):
     except Exception:
         return {"status": "ignored", "reason": "invalid JSON"}
 
+    # #504: Accept optional source field for API clients (Silo plugin uses
+    # this webhook but wants to identify as "silo"). Session key format stays
+    # "kodi:{user_id}:{session_id}" so Silo can still find its own sessions.
+    import re
+    source = payload.get("source", "kodi")
+    if not isinstance(source, str) or not re.fullmatch(r"[a-z0-9_-]{1,16}", source):
+        return {"status": "error", "reason": "source must be 1-16 lowercase letters, digits, '_' or '-'"}
+
     data = parse_kodi_payload(payload)
     if not data:
         return {"status": "ignored"}
@@ -3554,7 +3562,7 @@ async def _handle_kodi_webhook(request: Request, db: AsyncSession, user: User):
     session_key = f"kodi:{user.id}:{data['session_id']}"
 
     if notification_type == "play":
-        session = await _get_or_open_session(db, session_key, "kodi", user.id, media.id)
+        session = await _get_or_open_session(db, session_key, source, user.id, media.id)
         session.state = "playing"
         session.updated_at = utcnow()
         await db.commit()
@@ -3564,7 +3572,7 @@ async def _handle_kodi_webhook(request: Request, db: AsyncSession, user: User):
         await _maybe_bingebase_scrobble(settings, media, "start", data["progress_percent"], db=db)
 
     elif notification_type == "resume":
-        session = await _get_or_open_session(db, session_key, "kodi", user.id, media.id)
+        session = await _get_or_open_session(db, session_key, source, user.id, media.id)
         session.state = "playing"
         session.progress_percent = data["progress_percent"]
         session.progress_seconds = data["progress_seconds"]
@@ -3589,7 +3597,7 @@ async def _handle_kodi_webhook(request: Request, db: AsyncSession, user: User):
         await _maybe_bingebase_scrobble(settings, media, "pause", data["progress_percent"], db=db)
 
     elif notification_type == "progress":
-        session = await _get_or_open_session(db, session_key, "kodi", user.id, media.id)
+        session = await _get_or_open_session(db, session_key, source, user.id, media.id)
         session.state = "paused" if data["is_paused"] else "playing"
         session.progress_percent = data["progress_percent"]
         session.progress_seconds = data["progress_seconds"]
@@ -3616,7 +3624,7 @@ async def _handle_kodi_webhook(request: Request, db: AsyncSession, user: User):
         progress_seconds = data["progress_seconds"] or (session.progress_seconds if session else 0)
         completed = data.get("ended") or progress_percent >= 0.90
         if completed or progress_percent > 0.05:
-            await _write_watch_event(db, user.id, media.id, progress_percent, progress_seconds, completed, window_minutes, source="kodi")
+            await _write_watch_event(db, user.id, media.id, progress_percent, progress_seconds, completed, window_minutes, source=source)
         await db.commit()
         await _maybe_trakt_scrobble(settings, media, "stop", progress_percent, db=db)
         await _maybe_mdblist_scrobble(settings, media, "stop", progress_percent, db=db)

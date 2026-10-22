@@ -789,7 +789,8 @@ const bottomNavItem = (active: boolean) =>
           : (m.tmdb_id ? `/media/movie/${m.tmdb_id}` : null);
         const isPaused = session.state === 'paused';
         const sourceLabels = { plex: 'Plex', emby: 'Emby', kodi: 'Kodi', jellyfin: 'Jellyfin', manual: 'Scrob' };
-        const sourceLabel = sourceLabels[session.source] ?? session.source;
+        // #504: capitalize unknown sources (e.g. "silo" → "Silo") like watchSourceLabel does
+        const sourceLabel = sourceLabels[session.source] ?? (session.source.charAt(0).toUpperCase() + session.source.slice(1));
         const progressSeconds = session.progress_seconds ?? 0;
         const runtime = m.runtime ?? 0;
         const pct = runtime > 0
