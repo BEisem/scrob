@@ -4503,6 +4503,7 @@ async def _apply_nuvio_watch_history(
     show_map: dict[str, int],
     tmdb_ids: dict[str, int],
     *,
+    source: str = "nuvio",
     include_unknown_dates: bool = False,
     dedupe_by_media_id_only: bool = False,
 ) -> set[int]:
@@ -4608,7 +4609,7 @@ async def _apply_nuvio_watch_history(
             continue
         event = WatchEvent(
             user_id=user_id,
-            source="nuvio",
+            source=source,
             media_id=media.id,
             watched_at=watched_at,
             completed=True,
@@ -5447,6 +5448,7 @@ async def _run_stremio_sync(
                         watched_records,
                         show_map,
                         tmdb_ids,
+                        source="stremio",
                         include_unknown_dates=True,
                         dedupe_by_media_id_only=True,
                     )
