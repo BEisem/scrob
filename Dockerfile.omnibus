@@ -24,7 +24,7 @@ ENV TZ=UTC
 # major would refuse to start on them. We manage our own data dir at
 # /app/postgres/data.
 RUN apk upgrade --no-cache && apk add --no-cache \
-    nodejs \
+    "nodejs>=24.22.1" \
     postgresql17 \
     su-exec \
     tzdata
