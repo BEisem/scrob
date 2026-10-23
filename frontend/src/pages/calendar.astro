@@ -76,9 +76,9 @@ const days = Object.keys(byDay);
 ---
 
 <Base title="Calendar">
-  <div class="mb-8 flex items-center justify-between gap-4">
+  <div class="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
     <h1 class="page-title">Calendar</h1>
-    <div class="flex items-center gap-2 shrink-0">
+    <div class="flex flex-wrap items-center gap-2 sm:shrink-0">
     <select
       id="cal-days-select"
       aria-label="How far ahead to show"
