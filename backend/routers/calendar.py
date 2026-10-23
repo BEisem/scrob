@@ -396,9 +396,46 @@ def _trim_window(result: dict, days: int) -> dict:
     return {**result, "calendar": {**calendar, "entries": [e for e in entries if e["air_date"] <= last]}}
 
 
+async def _sonarr_config(db: AsyncSession, user_id: int):
+    from routers.media import _effective_sonarr, _get_global_settings
+
+    user_settings = (await db.execute(select(UserSettings).where(UserSettings.user_id == user_id))).scalar_one_or_none()
+    return _effective_sonarr(user_settings, await _get_global_settings(db))
+
+
+async def _apply_sonarr(
+    db: AsyncSession, user_id: int, result: dict, sonarr_only: bool, sonarr_monitored: bool
+) -> dict:
+    """Adds sonarr_configured and applies the optional Sonarr filters (#501):
+    sonarr_only keeps shows present in Sonarr, sonarr_monitored keeps shows
+    Sonarr has flagged monitored. Applied per request on top of the cached
+    payload, like the watch flags. Entries are left unfiltered when Sonarr
+    can't be reached, so a flaky Sonarr doesn't read as an empty calendar."""
+    from core import sonarr as sonarr_client
+
+    cfg = await _sonarr_config(db, user_id)
+    result = {**result, "sonarr_configured": cfg is not None}
+    calendar = result.get("calendar") or {}
+    entries = calendar.get("entries")
+    if not cfg or not entries or not (sonarr_only or sonarr_monitored):
+        return result
+    fetch = sonarr_client.get_monitored_series_ids if sonarr_monitored else sonarr_client.get_all_series_ids
+    ids = await fetch(cfg.sonarr_url, cfg.sonarr_token)
+    if not ids:
+        return result
+    sonarr_tmdb, sonarr_tvdb = ids
+    kept = [
+        e for e in entries
+        if (e.get("show_tmdb_id") in sonarr_tmdb) or (e.get("show_tvdb_id") in sonarr_tvdb)
+    ]
+    return {**result, "calendar": {**calendar, "entries": kept}}
+
+
 @router.get("")
 async def get_calendar(
     cached_only: bool = Query(False),
+    sonarr_only: bool = Query(False),
+    sonarr_monitored: bool = Query(False),
     days: int = Query(CALENDAR_DEFAULT_DAYS, ge=1, le=CALENDAR_WINDOW_DAYS),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user_or_api_key),
@@ -419,12 +456,16 @@ async def get_calendar(
             await _resolve_watch_status(db, current_user.id, row.payload.get("entries", []))
             if not fresh:
                 asyncio.create_task(_background_compute(current_user.id))
-            return _trim_window(
+            result = _trim_window(
                 {"computed_at": row.computed_at.isoformat(), "cached": True, "calendar": row.payload}, days
             )
+            return await _apply_sonarr(db, current_user.id, result, sonarr_only, sonarr_monitored)
         asyncio.create_task(_background_compute(current_user.id))
-        return {"computed_at": None, "cached": False, "calendar": {"entries": []}}
-    return _trim_window(await _load_or_compute(db, current_user.id, force=False), days)
+        return await _apply_sonarr(
+            db, current_user.id, {"computed_at": None, "cached": False, "calendar": {"entries": []}}, False, False
+        )
+    result = _trim_window(await _load_or_compute(db, current_user.id, force=False), days)
+    return await _apply_sonarr(db, current_user.id, result, sonarr_only, sonarr_monitored)
 
 
 @router.post("/refresh")

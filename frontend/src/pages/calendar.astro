@@ -1,5 +1,6 @@
 ---
 import Base from "../layouts/Base.astro";
+import FilterPanel from "../components/FilterPanel.astro";
 import { api, tmdbImageUrl, type CalendarEntry } from "../lib/api";
 import { ratingPosterUrl } from "../lib/posters";
 export const prerender = false;
@@ -20,18 +21,32 @@ const CALENDAR_DAY_CHOICES = [14, 30, 60, 90];
 const savedDays = Number(Astro.cookies.get("calendar_days")?.value);
 const lookaheadDays = CALENDAR_DAY_CHOICES.includes(savedDays) ? savedDays : 14;
 
+// Filters live in the URL like the other pages' FilterPanel. The Sonarr ones
+// are applied by the backend; Collected/Watched are applied below since each
+// entry already carries those flags.
+const arr = Astro.url.searchParams.getAll("arr");
+const collection = Astro.url.searchParams.get("collection") ?? "";
+const watch = Astro.url.searchParams.get("watch") ?? "";
+const sonarrOnly = arr.includes("in");
+const sonarrMonitored = arr.includes("monitored");
+
 let calendarData: Awaited<ReturnType<typeof api.calendar.get>> | null = null;
 let loadError = "";
 try {
-  calendarData = await api.calendar.get(token, true, lookaheadDays);
+  calendarData = await api.calendar.get(token, true, lookaheadDays, sonarrOnly, sonarrMonitored);
 } catch (e: any) {
   loadError = e.message;
 }
 
 // Only actually "needs" a client-side wait when there's no load error to
 // show instead - an error should never trigger the poll-and-reload loop.
+const sonarrConfigured = calendarData?.sonarr_configured ?? false;
 const needsCompute = !loadError && !calendarData?.cached;
-const entries = calendarData?.calendar?.entries ?? [];
+const entries = (calendarData?.calendar?.entries ?? []).filter((e) =>
+  (collection === "in" ? e.collected : collection === "out" ? !e.collected : true) &&
+  (watch === "watched" ? e.watched : watch === "unwatched" ? !e.watched : true)
+);
+const hasFilters = !!(arr.length || collection || watch);
 const todayIso = calendarData?.calendar?.today ?? new Date().toISOString().slice(0, 10);
 
 function dayLabel(iso: string, today: string): string {
@@ -73,6 +88,20 @@ const days = Object.keys(byDay);
         <option value={d} selected={d === lookaheadDays}>Next {d} days</option>
       ))}
     </select>
+    <FilterPanel
+      id="calendar-filters"
+      basePath="/calendar"
+      sections={[
+        ...(sonarrConfigured ? [{
+          key: "arr", label: "Sonarr", selected: arr,
+          options: [{ value: "in", label: "In Sonarr" }, { value: "monitored", label: "Monitored" }],
+        }] : []),
+        { key: "collection", label: "Collection", multi: false, selected: collection ? [collection] : [],
+          options: [{ value: "in", label: "Collected" }, { value: "out", label: "Not Collected" }] },
+        { key: "watch", label: "Watched", multi: false, selected: watch ? [watch] : [],
+          options: [{ value: "watched", label: "Watched" }, { value: "unwatched", label: "Unwatched" }] },
+      ]}
+    />
     <button
       id="cal-refresh-btn"
       class="flex items-center gap-2 px-4 py-2 text-sm font-bold text-zinc-400 bg-zinc-900 border border-zinc-800 rounded-xl hover:border-zinc-600 hover:text-zinc-200 transition-all cursor-pointer shrink-0"
@@ -91,7 +120,7 @@ const days = Object.keys(byDay);
   ) : needsCompute ? (
     <div id="cal-pending" class="py-20 text-center text-zinc-500">Checking air dates for your shows… (first time can take a minute)</div>
   ) : days.length === 0 ? (
-    <p class="text-zinc-500 text-center py-10">No episodes found for your shows in the last 7 or next {lookaheadDays} days.</p>
+    <p class="text-zinc-500 text-center py-10">{hasFilters ? "No episodes match these filters." : `No episodes found for your shows in the last 7 or next ${lookaheadDays} days.`}</p>
   ) : (
     <div class="space-y-8">
       {days.map((day) => (
