@@ -3542,6 +3542,10 @@ async def _handle_kodi_webhook(request: Request, db: AsyncSession, user: User):
     source = payload.get("source", "kodi")
     if not isinstance(source, str) or not re.fullmatch(r"[a-z0-9_-]{1,16}", source):
         return {"status": "error", "reason": "source must be 1-16 lowercase letters, digits, '_' or '-'"}
+    # The Kodi add-on already sends source="library_update" to flag a library
+    # mark-as-watched (see parse_kodi_payload); that is still a Kodi play.
+    if source == "library_update":
+        source = "kodi"
 
     data = parse_kodi_payload(payload)
     if not data:
